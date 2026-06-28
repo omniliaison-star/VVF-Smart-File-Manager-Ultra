@@ -21,9 +21,10 @@ jobs:
         java-version: '17'
         cache: 'gradle'
 
-    - name: Grant Execute Permission for Gradle Wrapper
-      run: chmod +x gradlew
-      continue-on-error: true
+    - name: Set up Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: '9.3.1'
 
     - name: Build with Gradle
-      run: ./gradlew assembleDebug --stacktrace
+      run: gradle assembleDebug --stacktrace
