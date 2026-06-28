@@ -1,0 +1,6 @@
+{
+  "name": "VVF Smart File Manager Ultra",
+  "description": "A modern, secure Android File Manager with traditional explorer, AI-powered semantic search, duplicate cleaner, safe vault, and media manager.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
