@@ -291,6 +291,29 @@ class FileRepository(
         }
     }
 
+    private fun securelyWipe(file: File) {
+        try {
+            if (file.isDirectory) {
+                file.listFiles()?.forEach { securelyWipe(it) }
+            } else if (file.exists() && file.isFile && file.canWrite()) {
+                val length = file.length()
+                if (length > 0) {
+                    val zeros = ByteArray(8192)
+                    var remaining = length
+                    java.io.RandomAccessFile(file, "rws").use { raf ->
+                        while (remaining > 0) {
+                            val writeSize = remaining.coerceAtMost(zeros.size.toLong()).toInt()
+                            raf.write(zeros, 0, writeSize)
+                            remaining -= writeSize
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Secure wipe failed: ${e.message}")
+        }
+    }
+
     /**
      * traditional explorer operation: delete file
      */
@@ -298,6 +321,10 @@ class FileRepository(
         try {
             val file = File(filePath)
             if (!file.exists()) return@withContext false
+            
+            // Securely wipe file contents before deleting
+            securelyWipe(file)
+            
             val success = if (file.isDirectory) {
                 file.deleteRecursively()
             } else {

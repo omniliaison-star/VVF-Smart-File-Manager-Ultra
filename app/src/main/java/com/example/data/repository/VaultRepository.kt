@@ -13,18 +13,66 @@ class VaultRepository(
 ) {
     private val sharedPrefs = context.getSharedPreferences("vvf_vault_prefs", Context.MODE_PRIVATE)
 
+    private fun generateSalt(): String {
+        return try {
+            val random = java.security.SecureRandom()
+            val saltBytes = ByteArray(16)
+            random.nextBytes(saltBytes)
+            android.util.Base64.encodeToString(saltBytes, android.util.Base64.NO_WRAP)
+        } catch (e: Exception) {
+            "default_static_salt_fallback"
+        }
+    }
+
+    private fun hashPin(pin: String, salt: String): String {
+        return try {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val saltedInput = pin + salt
+            val hashBytes = digest.digest(saltedInput.toByteArray(Charsets.UTF_8))
+            hashBytes.joinToString("") { "%02x".format(it) }
+        } catch (e: Exception) {
+            pin
+        }
+    }
+
     fun isPinSet(): Boolean {
         return sharedPrefs.contains("vault_pin")
     }
 
     fun setPin(pin: String): Boolean {
         if (pin.length < 4) return false
-        return sharedPrefs.edit().putString("vault_pin", pin).commit()
+        val salt = generateSalt()
+        val hashed = hashPin(pin, salt)
+        return sharedPrefs.edit()
+            .putString("vault_salt", salt)
+            .putString("vault_pin", hashed)
+            .commit()
     }
 
     fun verifyPin(pin: String): Boolean {
         val saved = sharedPrefs.getString("vault_pin", "") ?: ""
-        return saved.isNotEmpty() && saved == pin
+        if (saved.isEmpty()) return false
+        
+        val salt = sharedPrefs.getString("vault_salt", "") ?: ""
+        if (salt.isNotEmpty()) {
+            val hashedInput = hashPin(pin, salt)
+            return saved == hashedInput
+        } else {
+            // Migrate old unsalted pin format
+            val legacyUnsaltedHash = try {
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                val hashBytes = digest.digest(pin.toByteArray(Charsets.UTF_8))
+                hashBytes.joinToString("") { "%02x".format(it) }
+            } catch (e: Exception) {
+                pin
+            }
+            if (saved == legacyUnsaltedHash || saved == pin) {
+                // Securely migrate to salted hash
+                setPin(pin)
+                return true
+            }
+        }
+        return false
     }
 
     suspend fun getVaultFiles(): List<FileItem> = withContext(Dispatchers.IO) {
@@ -72,8 +120,8 @@ class VaultRepository(
             
             EncryptionHelper.decryptFile(encFile, destFile)
             
-            // Delete encrypted vault file after successful decryption
-            encFile.delete()
+            // Delete encrypted vault file after successful decryption using secure wipe
+            fileRepository.deleteFile(vaultPath)
             return@withContext true
         } catch (e: Exception) {
             e.printStackTrace()

@@ -16,6 +16,26 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Schedule periodic background junk cleanup using WorkManager
+        try {
+            val constraints = androidx.work.Constraints.Builder()
+                .setRequiresBatteryNotLow(true)
+                .build()
+            val cleanupRequest = androidx.work.PeriodicWorkRequestBuilder<com.example.util.JunkCleanWorker>(
+                1, java.util.concurrent.TimeUnit.DAYS
+            )
+                .setConstraints(constraints)
+                .build()
+            androidx.work.WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+                "JunkCleanupWork",
+                androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+                cleanupRequest
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         setContent {
             MyApplicationTheme {
                 val viewModel: MainViewModel = viewModel()
