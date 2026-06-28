@@ -26,6 +26,8 @@ import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
+import com.example.data.database.AppDatabase
 import kotlinx.coroutines.withContext
 
 class FileRepository(
@@ -905,5 +907,97 @@ class FileRepository(
     } catch (e: Exception) {
         android.util.Log.e(TAG, "Error enriching metadata for ${item.path}", e)
         item
+    }
+
+    suspend fun getRecommendationsFromSearchHistory(): List<FileItem> = withContext(Dispatchers.IO) {
+        try {
+            if (!GeminiService.isApiKeyAvailable()) {
+                Log.d("FileRepository", "Gemini API key is not configured. Skipping history-based recommendations.")
+                return@withContext emptyList()
+            }
+            val db = AppDatabase.getDatabase(context)
+            val historyList = db.searchHistoryDao().getSearchHistory().first()
+            val latest = historyList.firstOrNull() ?: return@withContext emptyList()
+            val query = latest.query
+            if (query.trim().isEmpty()) return@withContext emptyList()
+
+            val queryEmbedding = GeminiService.getEmbedding(query) ?: return@withContext emptyList()
+            val dbEmbeddings = embeddingDao.getAllEmbeddings()
+            if (dbEmbeddings.isEmpty()) return@withContext emptyList()
+
+            val scoredFiles = dbEmbeddings.mapNotNull { dbEmb ->
+                val dbFile = fileDao.getFileById(dbEmb.fileId) ?: return@mapNotNull null
+                val file = File(dbFile.path)
+                if (!file.exists()) return@mapNotNull null
+                
+                val fileVector = dbEmb.vectorData.split(",").map { it.toFloat() }.toFloatArray()
+                val score = GeminiService.cosineSimilarity(queryEmbedding, fileVector)
+                Pair(dbFile, score)
+            }
+
+            val top5 = scoredFiles.sortedByDescending { it.second }.take(5)
+            return@withContext top5.map { (dbFile, _) ->
+                FileItem(
+                    id = dbFile.path,
+                    name = dbFile.name,
+                    path = dbFile.path,
+                    size = dbFile.size,
+                    isDirectory = false,
+                    mimeType = dbFile.mimeType,
+                    lastModified = dbFile.modifiedAt
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("FileRepository", "Error in getRecommendationsFromSearchHistory: ${e.message}", e)
+            emptyList()
+        }
+    }
+
+    suspend fun getCategoryBasedRecommendations(): List<FileItem> = withContext(Dispatchers.IO) {
+        try {
+            val db = AppDatabase.getDatabase(context)
+            val categories = db.categoryEntityDao().getAllCategories().first()
+            val topCategory = categories.maxByOrNull { it.fileCount } ?: return@withContext emptyList()
+            if (topCategory.fileCount == 0) return@withContext emptyList()
+
+            val filesInCategory = getFilesByCategory(topCategory.name)
+            val sevenDaysAgo = System.currentTimeMillis() - (7L * 24 * 60 * 60 * 1000)
+            val filtered = filesInCategory.filter { it.lastModified < sevenDaysAgo }
+            
+            return@withContext filtered.take(5)
+        } catch (e: Exception) {
+            Log.e("FileRepository", "Error in getCategoryBasedRecommendations: ${e.message}", e)
+            emptyList()
+        }
+    }
+
+    suspend fun getLargeFilesRecommendation(): List<FileItem> = withContext(Dispatchers.IO) {
+        try {
+            val allDbFiles = fileDao.getAllFilesList()
+            if (allDbFiles.isEmpty()) return@withContext emptyList()
+
+            val sortedBySec = allDbFiles.sortedByDescending { it.size }
+            val n = sortedBySec.size
+            val top1PercentCount = maxOf(1, (n * 0.01).toInt())
+            val top1PercentFiles = sortedBySec.take(top1PercentCount)
+
+            val ninetyDaysAgo = System.currentTimeMillis() - (90L * 24 * 60 * 60 * 1000)
+            val filtered = top1PercentFiles.filter { it.modifiedAt < ninetyDaysAgo }
+
+            return@withContext filtered.map { dbFile ->
+                FileItem(
+                    id = dbFile.path,
+                    name = dbFile.name,
+                    path = dbFile.path,
+                    size = dbFile.size,
+                    isDirectory = false,
+                    mimeType = dbFile.mimeType,
+                    lastModified = dbFile.modifiedAt
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("FileRepository", "Error in getLargeFilesRecommendation: ${e.message}", e)
+            emptyList()
+        }
     }
 }

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.Flow
@@ -156,18 +157,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val mediaAudio: StateFlow<List<FileItem>> = _mediaAudio.asStateFlow()
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val pagedExplorerFiles: Flow<PagingData<FileItem>> = _explorerFiles
-        .flatMapLatest { list ->
+    val pagedExplorerFiles: Flow<PagingData<FileItem>> = combine(
+        _currentPath,
+        _selectedCategoryFilter
+    ) { path, category ->
+        Pair(path, category)
+    }.flatMapLatest { (path, category) ->
+        if (category != null) {
+            val list = fileRepository.getFilesByCategory(category)
             Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
-                com.example.util.FilePagingSource(list)
+                com.example.util.SimpleListPagingSource(list)
             }.flow
-        }.cachedIn(viewModelScope)
+        } else {
+            if (path.isEmpty()) {
+                Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
+                    val roomSource = database.fileDao().getAllFilesPaged()
+                    object : androidx.paging.PagingSource<Int, FileItem>() {
+                        override fun getRefreshKey(state: androidx.paging.PagingState<Int, FileItem>): Int? = null
+                        override suspend fun load(params: LoadParams<Int>): LoadResult<Int, FileItem> {
+                            val result = roomSource.load(androidx.paging.PagingSource.LoadParams.Refresh(
+                                key = params.key ?: 0,
+                                loadSize = params.loadSize,
+                                placeholdersEnabled = false
+                            ))
+                            return when (result) {
+                                is LoadResult.Page -> {
+                                    val mappedData = result.data.map { dbFile ->
+                                        FileItem(
+                                            id = dbFile.path,
+                                            name = dbFile.name,
+                                            path = dbFile.path,
+                                            size = dbFile.size,
+                                            isDirectory = false,
+                                            mimeType = dbFile.mimeType,
+                                            lastModified = dbFile.modifiedAt
+                                        )
+                                    }
+                                    LoadResult.Page(
+                                        data = mappedData,
+                                        prevKey = result.prevKey,
+                                        nextKey = result.nextKey
+                                    )
+                                }
+                                is LoadResult.Error -> LoadResult.Error(result.throwable)
+                                is LoadResult.Invalid -> LoadResult.Invalid()
+                            }
+                        }
+                    }
+                }.flow
+            } else {
+                Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
+                    com.example.util.FilePagingSource(fileRepository, path)
+                }.flow
+            }
+        }
+    }.cachedIn(viewModelScope)
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val pagedMediaImages: Flow<PagingData<FileItem>> = _mediaImages
         .flatMapLatest { list ->
             Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
-                com.example.util.FilePagingSource(list)
+                com.example.util.SimpleListPagingSource(list)
             }.flow
         }.cachedIn(viewModelScope)
 
@@ -175,7 +225,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val pagedMediaVideos: Flow<PagingData<FileItem>> = _mediaVideos
         .flatMapLatest { list ->
             Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
-                com.example.util.FilePagingSource(list)
+                com.example.util.SimpleListPagingSource(list)
             }.flow
         }.cachedIn(viewModelScope)
 
@@ -183,7 +233,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val pagedMediaAudio: Flow<PagingData<FileItem>> = _mediaAudio
         .flatMapLatest { list ->
             Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
-                com.example.util.FilePagingSource(list)
+                com.example.util.SimpleListPagingSource(list)
             }.flow
         }.cachedIn(viewModelScope)
 
@@ -283,6 +333,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _chatMessages = MutableStateFlow<List<com.example.data.database.ChatMessageEntity>>(emptyList())
     val chatMessages: StateFlow<List<com.example.data.database.ChatMessageEntity>> = _chatMessages.asStateFlow()
 
+    // Recommendation State
+    private val _historyRecommendations = MutableStateFlow<List<FileItem>>(emptyList())
+    val historyRecommendations: StateFlow<List<FileItem>> = _historyRecommendations.asStateFlow()
+
+    private val _categoryRecommendations = MutableStateFlow<List<FileItem>>(emptyList())
+    val categoryRecommendations: StateFlow<List<FileItem>> = _categoryRecommendations.asStateFlow()
+
+    private val _largeFileRecommendations = MutableStateFlow<List<FileItem>>(emptyList())
+    val largeFileRecommendations: StateFlow<List<FileItem>> = _largeFileRecommendations.asStateFlow()
+
+    private val _isRecommendationsLoading = MutableStateFlow(false)
+    val isRecommendationsLoading: StateFlow<Boolean> = _isRecommendationsLoading.asStateFlow()
+
+    fun refreshRecommendations() {
+        viewModelScope.launch {
+            _isRecommendationsLoading.value = true
+            try {
+                _historyRecommendations.value = fileRepository.getRecommendationsFromSearchHistory()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error fetching history recommendations: ${e.message}", e)
+            }
+            try {
+                _categoryRecommendations.value = fileRepository.getCategoryBasedRecommendations()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error fetching category recommendations: ${e.message}", e)
+            }
+            try {
+                _largeFileRecommendations.value = fileRepository.getLargeFilesRecommendation()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error fetching large files recommendations: ${e.message}", e)
+            }
+            _isRecommendationsLoading.value = false
+        }
+    }
+
     private val _isHighThinkingEnabled = MutableStateFlow(false)
     val isHighThinkingEnabled: StateFlow<Boolean> = _isHighThinkingEnabled.asStateFlow()
 
@@ -309,6 +394,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadChatMessages()
         loadCachedDuplicates()
         _selectedCloudAccount.value?.let { generateSimulatedCloudFiles(it) }
+        refreshRecommendations()
     }
 
     fun navigateTo(screen: Screen) {
@@ -344,6 +430,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _explorerFiles.value = sortFileList(raw, _sortBy.value, _sortOrder.value)
             _selectedFiles.value = emptySet()
         }
+    }
+
+    fun navigateToItem(file: FileItem) {
+        if (file.isDirectory) {
+            loadExplorerFiles(file.path)
+        } else {
+            val parentFile = java.io.File(file.path).parentFile
+            if (parentFile != null) {
+                val parentPath = if (parentFile.absolutePath == fileRepository.sandboxRoot.absolutePath) "" else parentFile.absolutePath
+                loadExplorerFiles(parentPath)
+            } else {
+                loadExplorerFiles("")
+            }
+        }
+        navigateTo(Screen.Explorer)
     }
 
     fun setCategoryFilter(categoryName: String?) {

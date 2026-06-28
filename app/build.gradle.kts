@@ -82,6 +82,7 @@ dependencies {
   // implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
+  implementation(libs.androidx.room.paging)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.androidx.paging.runtime.ktx)
   implementation(libs.androidx.paging.compose)

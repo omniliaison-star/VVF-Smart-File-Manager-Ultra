@@ -2,11 +2,15 @@ package com.example.data.database
 
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
+import androidx.paging.PagingSource
 
 @Dao
 interface FileDao {
     @Query("SELECT * FROM files ORDER BY name ASC")
     fun getAllFiles(): Flow<List<DbFile>>
+
+    @Query("SELECT * FROM files ORDER BY name ASC")
+    fun getAllFilesPaged(): PagingSource<Int, DbFile>
 
     @Query("SELECT * FROM files ORDER BY name ASC")
     suspend fun getAllFilesList(): List<DbFile>

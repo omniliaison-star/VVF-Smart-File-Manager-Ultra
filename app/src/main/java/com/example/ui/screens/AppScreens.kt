@@ -362,6 +362,164 @@ fun DashboardScreen(viewModel: MainViewModel) {
                 }
             }
         }
+
+        // Recommendations Section
+        item {
+            val historyRecs by viewModel.historyRecommendations.collectAsState()
+            val categoryRecs by viewModel.categoryRecommendations.collectAsState()
+            val largeRecs by viewModel.largeFileRecommendations.collectAsState()
+            val isLoadingRecs by viewModel.isRecommendationsLoading.collectAsState()
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Smart Recommendations",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                IconButton(onClick = { viewModel.refreshRecommendations() }) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Refresh recommendations",
+                        tint = SaffronPrimary
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (isLoadingRecs) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(100.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = SaffronPrimary)
+                }
+            } else if (historyRecs.isEmpty() && categoryRecs.isEmpty() && largeRecs.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No recommendations yet. Use search and organize files to generate recommendations.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.Gray,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    // 1. History based (AI-based)
+                    if (historyRecs.isNotEmpty()) {
+                        RecommendationGroup(
+                            title = "Based on Recent Search (AI-Powered)",
+                            icon = Icons.Default.AutoAwesome,
+                            files = historyRecs,
+                            onFileClick = { viewModel.navigateToItem(it) }
+                        )
+                    }
+
+                    // 2. Category based (Offline)
+                    if (categoryRecs.isNotEmpty()) {
+                        RecommendationGroup(
+                            title = "Unused Category Files (Offline)",
+                            icon = Icons.Default.Folder,
+                            files = categoryRecs,
+                            onFileClick = { viewModel.navigateToItem(it) }
+                        )
+                    }
+
+                    // 3. Large files (Offline)
+                    if (largeRecs.isNotEmpty()) {
+                        RecommendationGroup(
+                            title = "Large Unused Files (Offline)",
+                            icon = Icons.Default.Delete,
+                            files = largeRecs,
+                            onFileClick = { viewModel.navigateToItem(it) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RecommendationGroup(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    files: List<FileItem>,
+    onFileClick: (FileItem) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(vertical = 4.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = SaffronPrimary, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(8.dp)) {
+                files.forEach { file ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onFileClick(file) }
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "File",
+                            tint = Color.Gray,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = file.name,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ArrowForward,
+                            contentDescription = "Navigate to file",
+                            tint = SaffronPrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
