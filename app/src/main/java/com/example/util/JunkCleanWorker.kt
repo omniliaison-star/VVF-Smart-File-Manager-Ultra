@@ -7,15 +7,17 @@ import androidx.work.WorkerParameters
 import com.example.data.database.AppDatabase
 import com.example.data.repository.FileRepository
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class JunkCleanWorker(
     appContext: Context,
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
 
-    override suspend fun doWork(): Result {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         Log.d("JunkCleanWorker", "Starting background periodic junk cleanup...")
-        return try {
+        try {
             val db = AppDatabase.getDatabase(applicationContext)
             val fileRepository = FileRepository(applicationContext, db.fileDao(), db.embeddingDao())
             
@@ -28,14 +30,14 @@ class JunkCleanWorker(
             
             junkMap["logs"]?.forEach { item ->
                 val file = File(item.path)
-                if (file.exists() && file.delete()) {
+                if (file.exists() && SecureDeleter.secureDelete(file)) {
                     deletedCount++
                     deletedBytes += item.size
                 }
             }
             junkMap["temp"]?.forEach { item ->
                 val file = File(item.path)
-                if (file.exists() && file.delete()) {
+                if (file.exists() && SecureDeleter.secureDelete(file)) {
                     deletedCount++
                     deletedBytes += item.size
                 }
@@ -44,7 +46,7 @@ class JunkCleanWorker(
             // Clean empty dirs
             junkMap["empty"]?.forEach { item ->
                 val file = File(item.path)
-                if (file.exists() && file.delete()) {
+                if (file.exists() && SecureDeleter.secureDelete(file)) {
                     deletedCount++
                 }
             }
