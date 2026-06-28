@@ -52,7 +52,60 @@ data class CloudFile(
     val category: String = "Other"
 )
 
+enum class SortBy {
+    NAME, SIZE, DATE, TYPE
+}
+
+enum class SortOrder {
+    ASCENDING, DESCENDING
+}
+
+enum class ViewMode {
+    LIST, GRID
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val _sortBy = MutableStateFlow(SortBy.NAME)
+    val sortBy: StateFlow<SortBy> = _sortBy.asStateFlow()
+
+    private val _sortOrder = MutableStateFlow(SortOrder.ASCENDING)
+    val sortOrder: StateFlow<SortOrder> = _sortOrder.asStateFlow()
+
+    private val _viewMode = MutableStateFlow(ViewMode.LIST)
+    val viewMode: StateFlow<ViewMode> = _viewMode.asStateFlow()
+
+    fun setSortBy(by: SortBy) {
+        _sortBy.value = by
+        applySorting()
+    }
+
+    fun toggleSortOrder() {
+        _sortOrder.value = if (_sortOrder.value == SortOrder.ASCENDING) SortOrder.DESCENDING else SortOrder.ASCENDING
+        applySorting()
+    }
+
+    fun toggleViewMode() {
+        _viewMode.value = if (_viewMode.value == ViewMode.LIST) ViewMode.GRID else ViewMode.LIST
+    }
+
+    private fun sortFileList(list: List<FileItem>, by: SortBy, order: SortOrder): List<FileItem> {
+        val comparator = when (by) {
+            SortBy.NAME -> compareBy<FileItem> { it.name.lowercase() }
+            SortBy.SIZE -> compareBy { it.size }
+            SortBy.DATE -> compareBy { it.lastModified }
+            SortBy.TYPE -> compareBy { it.mimeType.lowercase() }
+        }
+        return if (order == SortOrder.ASCENDING) {
+            list.sortedWith(comparator)
+        } else {
+            list.sortedWith(comparator.reversed())
+        }
+    }
+
+    private fun applySorting() {
+        _explorerFiles.value = sortFileList(_explorerFiles.value, _sortBy.value, _sortOrder.value)
+    }
 
     private val database = AppDatabase.getDatabase(application)
     val fileRepository = FileRepository(
@@ -287,7 +340,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _selectedCategoryFilter.value = null
             _currentPath.value = path
-            _explorerFiles.value = fileRepository.getFilesAndFolders(path)
+            val raw = fileRepository.getFilesAndFolders(path)
+            _explorerFiles.value = sortFileList(raw, _sortBy.value, _sortOrder.value)
             _selectedFiles.value = emptySet()
         }
     }
@@ -296,7 +350,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedCategoryFilter.value = categoryName
         if (categoryName != null) {
             viewModelScope.launch {
-                _explorerFiles.value = fileRepository.getFilesByCategory(categoryName)
+                val raw = fileRepository.getFilesByCategory(categoryName)
+                _explorerFiles.value = sortFileList(raw, _sortBy.value, _sortOrder.value)
                 _selectedFiles.value = emptySet()
                 _currentScreen.value = Screen.Explorer
             }

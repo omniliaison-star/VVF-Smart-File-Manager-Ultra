@@ -369,6 +369,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ExplorerScreen(viewModel: MainViewModel) {
+    val context = LocalContext.current
     val currentPath by viewModel.currentPath.collectAsState()
     val files by viewModel.explorerFiles.collectAsState()
     val pagedFiles = viewModel.pagedExplorerFiles.collectAsLazyPagingItems()
@@ -382,6 +383,7 @@ fun ExplorerScreen(viewModel: MainViewModel) {
     var activeFileItemForMenu by remember { mutableStateOf<FileItem?>(null) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameFileName by remember { mutableStateOf("") }
+    var showDetailsDialog by remember { mutableStateOf<FileItem?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Toolbar with path address
@@ -424,6 +426,38 @@ fun ExplorerScreen(viewModel: MainViewModel) {
             }
 
             if (selected.isNotEmpty()) {
+                IconButton(onClick = {
+                    try {
+                        val uris = ArrayList<android.net.Uri>()
+                        val authority = "${context.packageName}.fileprovider"
+                        for (path in selected) {
+                            val f = File(path)
+                            if (!f.isDirectory) {
+                                val uri = androidx.core.content.FileProvider.getUriForFile(context, authority, f)
+                                uris.add(uri)
+                            }
+                        }
+                        if (uris.isNotEmpty()) {
+                            val intent = if (uris.size == 1) {
+                                android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                    type = context.contentResolver.getType(uris[0]) ?: "*/*"
+                                    putExtra(android.content.Intent.EXTRA_STREAM, uris[0])
+                                }
+                            } else {
+                                android.content.Intent(android.content.Intent.ACTION_SEND_MULTIPLE).apply {
+                                    type = "*/*"
+                                    putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, uris)
+                                }
+                            }
+                            intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            context.startActivity(android.content.Intent.createChooser(intent, "Share Files"))
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }) {
+                    Icon(Icons.Default.Share, contentDescription = "Share Selected", tint = SaffronPrimary)
+                }
                 IconButton(onClick = { viewModel.deleteSelectedFiles() }) {
                     Icon(Icons.Default.Delete, contentDescription = "Delete Selected", tint = Color.Red)
                 }
@@ -485,6 +519,79 @@ fun ExplorerScreen(viewModel: MainViewModel) {
             }
         }
 
+        // Sort & View Mode row
+        val viewMode by viewModel.viewMode.collectAsState()
+        val sortBy by viewModel.sortBy.collectAsState()
+        val sortOrder by viewModel.sortOrder.collectAsState()
+        var showSortMenu by remember { mutableStateOf(false) }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Sort Dropdown button
+            Box {
+                TextButton(
+                    onClick = { showSortMenu = true },
+                    colors = ButtonDefaults.textButtonColors(contentColor = SaffronPrimary)
+                ) {
+                    Icon(
+                        imageVector = if (sortOrder == com.example.SortOrder.ASCENDING) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                        contentDescription = "Sort Direction",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Sort: ${sortBy.name.lowercase().capitalize(Locale.ROOT)}")
+                }
+                DropdownMenu(
+                    expanded = showSortMenu,
+                    onDismissRequest = { showSortMenu = false }
+                ) {
+                    com.example.SortBy.values().forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.name.lowercase().capitalize(Locale.ROOT)) },
+                            onClick = {
+                                viewModel.setSortBy(option)
+                                showSortMenu = false
+                            },
+                            leadingIcon = {
+                                if (sortBy == option) {
+                                    Icon(Icons.Default.Check, contentDescription = "Selected", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        )
+                    }
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text(if (sortOrder == com.example.SortOrder.ASCENDING) "Descending" else "Ascending") },
+                        onClick = {
+                            viewModel.toggleSortOrder()
+                            showSortMenu = false
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (sortOrder == com.example.SortOrder.ASCENDING) Icons.Default.ArrowDownward else Icons.Default.ArrowUpward,
+                                contentDescription = "Toggle Order",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    )
+                }
+            }
+
+            // Grid / List toggle icon button
+            IconButton(onClick = { viewModel.toggleViewMode() }) {
+                Icon(
+                    imageVector = if (viewMode == com.example.ViewMode.LIST) Icons.Default.GridView else Icons.Default.List,
+                    contentDescription = if (viewMode == com.example.ViewMode.LIST) "Switch to Grid View" else "Switch to List View",
+                    tint = SaffronPrimary
+                )
+            }
+        }
+
         // Files & Folders List
         if (pagedFiles.itemCount == 0) {
             Box(
@@ -500,63 +607,138 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                 }
             }
         } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(bottom = 80.dp)
-            ) {
-                items(pagedFiles.itemCount) { index ->
-                    val file = pagedFiles[index] ?: return@items
-                    val isSelected = selected.contains(file.path)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(
-                                onClick = {
-                                    if (selected.isNotEmpty()) {
+            if (viewMode == com.example.ViewMode.LIST) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(bottom = 80.dp)
+                ) {
+                    items(pagedFiles.itemCount) { index ->
+                        val file = pagedFiles[index] ?: return@items
+                        val isSelected = selected.contains(file.path)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = {
+                                        if (selected.isNotEmpty()) {
+                                            viewModel.toggleFileSelection(file.path)
+                                        } else if (file.isDirectory) {
+                                            viewModel.loadExplorerFiles(file.path)
+                                        }
+                                    },
+                                    onLongClick = {
                                         viewModel.toggleFileSelection(file.path)
-                                    } else if (file.isDirectory) {
-                                        viewModel.loadExplorerFiles(file.path)
                                     }
-                                },
-                                onLongClick = {
-                                    viewModel.toggleFileSelection(file.path)
-                                }
+                                )
+                                .background(if (isSelected) SaffronPrimary.copy(alpha = 0.15f) else Color.Transparent)
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
+                                contentDescription = if (file.isDirectory) "Folder" else "File",
+                                tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                modifier = Modifier.size(40.dp)
                             )
-                            .background(if (isSelected) SaffronPrimary.copy(alpha = 0.15f) else Color.Transparent)
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
-                            contentDescription = if (file.isDirectory) "Folder" else "File",
-                            tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
-                            modifier = Modifier.size(40.dp)
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = file.name,
-                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = if (file.isDirectory) "Folder" else "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = file.name,
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (file.isDirectory) "Folder" else "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                            }
+     
+                            // More options trigger
+                            IconButton(onClick = { activeFileItemForMenu = file }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "File Options")
+                            }
                         }
- 
-                        // More options trigger
-                        IconButton(onClick = { activeFileItemForMenu = file }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "File Options")
+                    }
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(110.dp),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(bottom = 80.dp, start = 8.dp, end = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(pagedFiles.itemCount) { index ->
+                        val file = pagedFiles[index] ?: return@items
+                        val isSelected = selected.contains(file.path)
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(0.95f)
+                                .combinedClickable(
+                                    onClick = {
+                                        if (selected.isNotEmpty()) {
+                                            viewModel.toggleFileSelection(file.path)
+                                        } else if (file.isDirectory) {
+                                            viewModel.loadExplorerFiles(file.path)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        viewModel.toggleFileSelection(file.path)
+                                    }
+                                ),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSelected) SaffronPrimary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            ),
+                            border = if (isSelected) androidx.compose.foundation.BorderStroke(2.dp, SaffronPrimary) else null
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
+                                        contentDescription = if (file.isDirectory) "Folder" else "File",
+                                        tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = file.name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    if (!file.isDirectory) {
+                                        Text(
+                                            text = formatFileSize(file.size),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                }
+                                Box(modifier = Modifier.align(Alignment.TopEnd)) {
+                                    IconButton(
+                                        onClick = { activeFileItemForMenu = file },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = "File Options", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
-    }
+        } }
 
     // CREATE FOLDER DIALOG
     if (showCreateFolderDialog) {
@@ -615,7 +797,7 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Divider()
+                    HorizontalDivider()
 
                     // Rename option
                     Row(
@@ -632,6 +814,52 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                         Icon(Icons.Default.Add, contentDescription = "Rename", tint = SaffronPrimary)
                         Spacer(modifier = Modifier.width(16.dp))
                         Text("Rename")
+                    }
+
+                    // Share option
+                    if (!file.isDirectory) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    try {
+                                        val f = File(file.path)
+                                        val authority = "${context.packageName}.fileprovider"
+                                        val uri = androidx.core.content.FileProvider.getUriForFile(context, authority, f)
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                            type = context.contentResolver.getType(uri) ?: "*/*"
+                                            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        context.startActivity(android.content.Intent.createChooser(intent, "Share File"))
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                    activeFileItemForMenu = null
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = "Share", tint = SaffronPrimary)
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Text("Share File")
+                        }
+                    }
+
+                    // Details option
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showDetailsDialog = file
+                                activeFileItemForMenu = null
+                            }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Info, contentDescription = "Details", tint = SaffronPrimary)
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text("Details")
                     }
 
                     // Vault option
@@ -709,6 +937,30 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                 }
             }
         }
+    }
+
+    // FILE DETAILS DIALOG
+    if (showDetailsDialog != null) {
+        val dFile = showDetailsDialog!!
+        AlertDialog(
+            onDismissRequest = { showDetailsDialog = null },
+            title = { Text("File Details", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Name: ${dFile.name}", fontWeight = FontWeight.SemiBold)
+                    Text("Path: ${dFile.path}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    Text("Size: ${formatFileSize(dFile.size)}")
+                    Text("Type: ${if (dFile.isDirectory) "Folder" else "File"}")
+                    Text("MimeType: ${dFile.mimeType}")
+                    Text("Last Modified: ${formatTimestamp(dFile.lastModified)}")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDetailsDialog = null }) {
+                    Text("Close", color = SaffronPrimary)
+                }
+            }
+        )
     }
 
     // RENAME FILE DIALOG
@@ -1661,6 +1913,20 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
     val pagedAudio = viewModel.pagedMediaAudio.collectAsLazyPagingItems()
 
     var selectedTab by remember { mutableStateOf(0) }
+    var activeSlideshowIndex by remember { mutableStateOf<Int?>(null) }
+    var isSlideshowPlaying by remember { mutableStateOf(true) }
+
+    // Slideshow Auto-advance logic
+    LaunchedEffect(activeSlideshowIndex, isSlideshowPlaying) {
+        if (activeSlideshowIndex != null && isSlideshowPlaying) {
+            kotlinx.coroutines.delay(3000)
+            val currentIdx = activeSlideshowIndex!!
+            val totalCount = pagedImages.itemCount
+            if (totalCount > 0) {
+                activeSlideshowIndex = (currentIdx + 1) % totalCount
+            }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = selectedTab, contentColor = SaffronPrimary) {
@@ -1685,37 +1951,63 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
                         Text("No Images Found.", color = Color.Gray)
                     }
                 } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(pagedImages.itemCount) { index ->
-                            val img = pagedImages[index] ?: return@items
-                            Box(
-                                modifier = Modifier
-                                    .aspectRatio(1f)
-                                    .background(SaffronSecondary.copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
-                                contentAlignment = Alignment.Center
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Slideshow Row Header
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Button(
+                                onClick = {
+                                    activeSlideshowIndex = 0
+                                    isSlideshowPlaying = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary)
                             ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)) {
-                                    Icon(Icons.Default.Info, contentDescription = "Image", tint = SaffronPrimary)
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        img.name,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    if (img.width != null && img.height != null) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = "Start Slideshow")
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Start Slideshow")
+                            }
+                        }
+
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
+                            modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(pagedImages.itemCount) { index ->
+                                val img = pagedImages[index] ?: return@items
+                                Box(
+                                    modifier = Modifier
+                                        .aspectRatio(1f)
+                                        .background(SaffronSecondary.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            activeSlideshowIndex = index
+                                            isSlideshowPlaying = true
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)) {
+                                        Icon(Icons.Default.Info, contentDescription = "Image", tint = SaffronPrimary)
+                                        Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            "${img.width}x${img.height}",
-                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                            color = Color.Gray,
+                                            img.name,
+                                            style = MaterialTheme.typography.labelSmall,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
+                                        if (img.width != null && img.height != null) {
+                                            Text(
+                                                "${img.width}x${img.height}",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                                color = Color.Gray,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1776,6 +2068,126 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Slideshow Fullscreen Dialog
+    if (activeSlideshowIndex != null) {
+        val totalCount = pagedImages.itemCount
+        val currentIndex = activeSlideshowIndex!!
+        val currentImage = if (currentIndex in 0 until totalCount) pagedImages[currentIndex] else null
+
+        Dialog(
+            onDismissRequest = { activeSlideshowIndex = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color.Black.copy(alpha = 0.95f)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(16.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Header with name & progress
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = currentImage?.name ?: "Unknown Image",
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (currentImage?.width != null && currentImage.height != null) {
+                                Text(
+                                    text = "${currentImage.width}x${currentImage.height} • ${formatFileSize(currentImage.size)}",
+                                    color = Color.LightGray,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                        IconButton(onClick = { activeSlideshowIndex = null }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close Slideshow", tint = Color.White)
+                        }
+                    }
+
+                    // Image Display / Placeholder
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .background(Color.DarkGray, RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.Image,
+                                contentDescription = "Slideshow Image",
+                                tint = SaffronPrimary,
+                                modifier = Modifier.size(128.dp)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "Slideshow Active",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    // Progress indicator text
+                    Text(
+                        text = "${currentIndex + 1} of $totalCount",
+                        color = Color.White,
+                        modifier = Modifier.padding(vertical = 16.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+
+                    // Controls Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = {
+                                val prevIdx = if (totalCount > 0) (currentIndex - 1 + totalCount) % totalCount else null
+                                activeSlideshowIndex = prevIdx
+                            },
+                            enabled = totalCount > 1
+                        ) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Previous Image", tint = Color.White)
+                        }
+
+                        IconButton(
+                            onClick = { isSlideshowPlaying = !isSlideshowPlaying }
+                        ) {
+                            Icon(
+                                imageVector = if (isSlideshowPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isSlideshowPlaying) "Pause Slideshow" else "Play Slideshow",
+                                tint = SaffronPrimary,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                val nextIdx = if (totalCount > 0) (currentIndex + 1) % totalCount else null
+                                activeSlideshowIndex = nextIdx
+                            },
+                            enabled = totalCount > 1
+                        ) {
+                            Icon(Icons.Default.ArrowForward, contentDescription = "Next Image", tint = Color.White)
                         }
                     }
                 }
