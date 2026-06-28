@@ -9,5 +9,13 @@ data class FileItem(
     val mimeType: String,
     val lastModified: Long,
     val isSelected: Boolean = false,
-    val isVaultItem: Boolean = false
+    val isVaultItem: Boolean = false,
+    // Real media metadata extraction fields
+    val width: Int? = null,
+    val height: Int? = null,
+    val dateTaken: Long? = null,
+    val duration: Long? = null,
+    val resolution: String? = null,
+    val artist: String? = null,
+    val album: String? = null
 )

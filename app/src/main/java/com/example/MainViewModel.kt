@@ -19,7 +19,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
+import androidx.paging.cachedIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 sealed class Screen {
     object Dashboard : Screen()
@@ -92,6 +101,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _mediaAudio = MutableStateFlow<List<FileItem>>(emptyList())
     val mediaAudio: StateFlow<List<FileItem>> = _mediaAudio.asStateFlow()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val pagedExplorerFiles: Flow<PagingData<FileItem>> = _explorerFiles
+        .flatMapLatest { list ->
+            Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
+                com.example.util.FilePagingSource(list)
+            }.flow
+        }.cachedIn(viewModelScope)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val pagedMediaImages: Flow<PagingData<FileItem>> = _mediaImages
+        .flatMapLatest { list ->
+            Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
+                com.example.util.FilePagingSource(list)
+            }.flow
+        }.cachedIn(viewModelScope)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val pagedMediaVideos: Flow<PagingData<FileItem>> = _mediaVideos
+        .flatMapLatest { list ->
+            Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
+                com.example.util.FilePagingSource(list)
+            }.flow
+        }.cachedIn(viewModelScope)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val pagedMediaAudio: Flow<PagingData<FileItem>> = _mediaAudio
+        .flatMapLatest { list ->
+            Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) {
+                com.example.util.FilePagingSource(list)
+            }.flow
+        }.cachedIn(viewModelScope)
 
     // AI Semantic Search State
     private val _searchQuery = MutableStateFlow("")
@@ -388,35 +429,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // --- MEDIA CENTER METHODS ---
     fun loadMediaCenter() {
         viewModelScope.launch {
-            // Read standard sandbox files first to have offline fallback media
-            val sandboxImages = mutableListOf<FileItem>()
-            val sandboxVideos = mutableListOf<FileItem>()
-            val sandboxAudio = mutableListOf<FileItem>()
+            withContext(Dispatchers.IO) {
+                // Read standard sandbox files first to have offline fallback media
+                val sandboxImages = mutableListOf<FileItem>()
+                val sandboxVideos = mutableListOf<FileItem>()
+                val sandboxAudio = mutableListOf<FileItem>()
 
-            fun traverse(dir: File) {
-                val list = dir.listFiles() ?: return
-                for (f in list) {
-                    if (f.isDirectory) {
-                        traverse(f)
-                    } else {
-                        val mime = fileRepository.getMimeType(f)
-                        val item = FileItem(f.absolutePath, f.name, f.absolutePath, f.length(), false, mime, f.lastModified())
-                        if (mime.startsWith("image/")) sandboxImages.add(item)
-                        else if (mime.startsWith("video/")) sandboxVideos.add(item)
-                        else if (mime.startsWith("audio/")) sandboxAudio.add(item)
+                fun traverse(dir: File) {
+                    val list = dir.listFiles() ?: return
+                    for (f in list) {
+                        if (f.isDirectory) {
+                            traverse(f)
+                        } else {
+                            val mime = fileRepository.getMimeType(f)
+                            val item = FileItem(f.absolutePath, f.name, f.absolutePath, f.length(), false, mime, f.lastModified())
+                            if (mime.startsWith("image/")) sandboxImages.add(item)
+                            else if (mime.startsWith("video/")) sandboxVideos.add(item)
+                            else if (mime.startsWith("audio/")) sandboxAudio.add(item)
+                        }
                     }
                 }
+                traverse(fileRepository.sandboxRoot)
+
+                // Try to merge with device media
+                val deviceImages = try { fileRepository.getMediaStoreImages() } catch (e: Exception) { emptyList() }
+                val deviceVideos = try { fileRepository.getMediaStoreVideos() } catch (e: Exception) { emptyList() }
+                val deviceAudio = try { fileRepository.getMediaStoreAudio() } catch (e: Exception) { emptyList() }
+
+                val enrichedImages = (sandboxImages + deviceImages).distinctBy { it.path }.map { fileRepository.enrichMediaMetadata(it) }
+                val enrichedVideos = (sandboxVideos + deviceVideos).distinctBy { it.path }.map { fileRepository.enrichMediaMetadata(it) }
+                val enrichedAudio = (sandboxAudio + deviceAudio).distinctBy { it.path }.map { fileRepository.enrichMediaMetadata(it) }
+
+                withContext(Dispatchers.Main) {
+                    _mediaImages.value = enrichedImages
+                    _mediaVideos.value = enrichedVideos
+                    _mediaAudio.value = enrichedAudio
+                }
             }
-            traverse(fileRepository.sandboxRoot)
-
-            // Try to merge with device media
-            val deviceImages = try { fileRepository.getMediaStoreImages() } catch (e: Exception) { emptyList() }
-            val deviceVideos = try { fileRepository.getMediaStoreVideos() } catch (e: Exception) { emptyList() }
-            val deviceAudio = try { fileRepository.getMediaStoreAudio() } catch (e: Exception) { emptyList() }
-
-            _mediaImages.value = (sandboxImages + deviceImages).distinctBy { it.path }
-            _mediaVideos.value = (sandboxVideos + deviceVideos).distinctBy { it.path }
-            _mediaAudio.value = (sandboxAudio + deviceAudio).distinctBy { it.path }
         }
     }
 

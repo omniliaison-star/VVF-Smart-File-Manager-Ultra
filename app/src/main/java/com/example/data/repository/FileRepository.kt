@@ -694,18 +694,24 @@ class FileRepository(
     /**
      * Scan for junk files (temp, logs, empty folders)
      */
-    suspend fun scanJunk(): Map<String, List<FileItem>> = withContext(Dispatchers.IO) {
+     suspend fun scanJunk(): Map<String, List<FileItem>> = withContext(Dispatchers.IO) {
         val junkMap = mutableMapOf<String, MutableList<FileItem>>()
         junkMap["logs"] = mutableListOf()
         junkMap["temp"] = mutableListOf()
         junkMap["empty"] = mutableListOf()
+        junkMap["residual"] = mutableListOf()
+
+        val dbPaths = try {
+            fileDao.getAllFilesList().map { it.path }.toSet()
+        } catch (e: Exception) {
+            emptySet()
+        }
 
         fun traverse(dir: File) {
             val list = dir.listFiles() ?: return
             for (f in list) {
                 if (f.isDirectory) {
-                    val children = f.listFiles()
-                    if (children == null || children.isEmpty()) {
+                    if (isFolderEmptyRecursively(f)) {
                         junkMap["empty"]?.add(
                             FileItem(f.absolutePath, f.name, f.absolutePath, 0L, true, "directory", f.lastModified())
                         )
@@ -715,10 +721,18 @@ class FileRepository(
                 } else {
                     val ext = f.extension.lowercase()
                     val item = FileItem(f.absolutePath, f.name, f.absolutePath, f.length(), false, getMimeType(f), f.lastModified())
-                    if (ext == "log") {
+                    
+                    var addedToJunk = false
+                    if (ext == "log" || ext == "bak") {
                         junkMap["logs"]?.add(item)
-                    } else if (ext == "tmp" || f.name.contains("cache")) {
+                        addedToJunk = true
+                    } else if (ext == "tmp" || f.name.contains("cache") || f.path.contains("/cache/")) {
                         junkMap["temp"]?.add(item)
+                        addedToJunk = true
+                    }
+
+                    if (!addedToJunk && !dbPaths.contains(f.absolutePath)) {
+                        junkMap["residual"]?.add(item)
                     }
                 }
             }
@@ -726,6 +740,12 @@ class FileRepository(
 
         traverse(sandboxRoot)
         return@withContext junkMap
+    }
+
+    private fun isFolderEmptyRecursively(file: File): Boolean {
+        val children = file.listFiles() ?: return true
+        if (children.isEmpty()) return true
+        return children.all { it.isDirectory && isFolderEmptyRecursively(it) }
     }
 
     /**
@@ -825,5 +845,65 @@ class FileRepository(
                 lastModified = dbFile.modifiedAt
             )
         }
+    }
+
+    fun enrichMediaMetadata(item: FileItem): FileItem = try {
+        val file = java.io.File(item.path)
+        if (!file.exists()) item
+        else {
+            if (item.mimeType.startsWith("image/")) {
+                val exif = android.media.ExifInterface(item.path)
+                val width = exif.getAttributeInt(android.media.ExifInterface.TAG_IMAGE_WIDTH, 0).takeIf { it > 0 }
+                val height = exif.getAttributeInt(android.media.ExifInterface.TAG_IMAGE_LENGTH, 0).takeIf { it > 0 }
+                val dateTakenStr = exif.getAttribute(android.media.ExifInterface.TAG_DATETIME)
+                var dateTaken: Long? = null
+                if (dateTakenStr != null) {
+                    try {
+                        val sdf = java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.getDefault())
+                        dateTaken = sdf.parse(dateTakenStr)?.time
+                    } catch (e: Exception) {}
+                }
+                item.copy(width = width, height = height, dateTaken = dateTaken ?: item.lastModified)
+            } else if (item.mimeType.startsWith("video/")) {
+                val retriever = android.media.MediaMetadataRetriever()
+                var duration: Long? = null
+                var resolution: String? = null
+                try {
+                    retriever.setDataSource(item.path)
+                    duration = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                    val w = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                    val h = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                    if (w != null && h != null) {
+                        resolution = "${w}x${h}"
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e(TAG, "Error retrieving video metadata for ${item.path}", e)
+                } finally {
+                    try { retriever.release() } catch (e: Exception) {}
+                }
+                item.copy(duration = duration, resolution = resolution)
+            } else if (item.mimeType.startsWith("audio/")) {
+                val retriever = android.media.MediaMetadataRetriever()
+                var duration: Long? = null
+                var artist: String? = null
+                var album: String? = null
+                try {
+                    retriever.setDataSource(item.path)
+                    duration = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                    artist = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                    album = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                } catch (e: Exception) {
+                    android.util.Log.e(TAG, "Error retrieving audio metadata for ${item.path}", e)
+                } finally {
+                    try { retriever.release() } catch (e: Exception) {}
+                }
+                item.copy(duration = duration, artist = artist, album = album)
+            } else {
+                item
+            }
+        }
+    } catch (e: Exception) {
+        android.util.Log.e(TAG, "Error enriching metadata for ${item.path}", e)
+        item
     }
 }

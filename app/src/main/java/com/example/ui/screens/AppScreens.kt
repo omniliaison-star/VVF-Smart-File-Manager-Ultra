@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.paging.compose.collectAsLazyPagingItems
 import com.example.MainViewModel
 import com.example.Screen
 import com.example.R
@@ -370,6 +371,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
 fun ExplorerScreen(viewModel: MainViewModel) {
     val currentPath by viewModel.currentPath.collectAsState()
     val files by viewModel.explorerFiles.collectAsState()
+    val pagedFiles = viewModel.pagedExplorerFiles.collectAsLazyPagingItems()
     val selected by viewModel.selectedFiles.collectAsState()
     val clipboard by viewModel.clipboard.collectAsState()
     val selectedCategoryFilter by viewModel.selectedCategoryFilter.collectAsState()
@@ -484,7 +486,7 @@ fun ExplorerScreen(viewModel: MainViewModel) {
         }
 
         // Files & Folders List
-        if (files.isEmpty()) {
+        if (pagedFiles.itemCount == 0) {
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -502,7 +504,8 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(bottom = 80.dp)
             ) {
-                items(files) { file ->
+                items(pagedFiles.itemCount) { index ->
+                    val file = pagedFiles[index] ?: return@items
                     val isSelected = selected.contains(file.path)
                     Row(
                         modifier = Modifier
@@ -544,7 +547,7 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                             )
                         }
-
+ 
                         // More options trigger
                         IconButton(onClick = { activeFileItemForMenu = file }) {
                             Icon(Icons.Default.MoreVert, contentDescription = "File Options")
@@ -1232,7 +1235,9 @@ fun JunkCleanerScreen(viewModel: MainViewModel) {
 
     val totalLogs = junkFiles["logs"]?.sumOf { it.size } ?: 0L
     val totalTemp = junkFiles["temp"]?.sumOf { it.size } ?: 0L
-    val totalJunkSize = totalLogs + totalTemp
+    val totalResidual = junkFiles["residual"]?.sumOf { it.size } ?: 0L
+    val totalEmptyCount = junkFiles["empty"]?.size ?: 0
+    val totalJunkSize = totalLogs + totalTemp + totalResidual
 
     Column(
         modifier = Modifier
@@ -1267,7 +1272,7 @@ fun JunkCleanerScreen(viewModel: MainViewModel) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = SaffronPrimary)
             }
-        } else if (totalJunkSize == 0L && (junkFiles["empty"]?.isEmpty() != false)) {
+        } else if (totalJunkSize == 0L && totalEmptyCount == 0) {
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -1285,14 +1290,16 @@ fun JunkCleanerScreen(viewModel: MainViewModel) {
                 modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Large Saffron circle showing space recoverable
-                Box(
-                    modifier = Modifier
-                        .size(160.dp)
-                        .background(SaffronPrimary.copy(alpha = 0.12f), CircleShape),
-                    contentAlignment = Alignment.Center
+                // Recoverable space overview
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
                         Text(
                             text = formatFileSize(totalJunkSize),
                             style = MaterialTheme.typography.headlineMedium.copy(
@@ -1301,37 +1308,145 @@ fun JunkCleanerScreen(viewModel: MainViewModel) {
                             )
                         )
                         Text(
-                            text = "Safe to Delete",
+                            text = "Total Recoverable Space",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.Gray
                         )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Card(
+                                modifier = Modifier.weight(1f),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Safe to Delete", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = Color.Green)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(formatFileSize(totalLogs + totalTemp), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                                    Text("$totalEmptyCount empty dirs", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                }
+                            }
+                            Card(
+                                modifier = Modifier.weight(1f),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("Review First", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = SaffronPrimary)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(formatFileSize(totalResidual), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                                    Text("${junkFiles["residual"]?.size ?: 0} residual files", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                }
+                            }
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Breakdown list
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                Text(
+                    text = "Breakdown",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.align(Alignment.Start)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f).fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("System Log Files", fontWeight = FontWeight.SemiBold)
-                            Text(formatFileSize(totalLogs), color = SaffronPrimary, fontWeight = FontWeight.Bold)
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("System Log Files", fontWeight = FontWeight.Bold)
+                                    Text("Logs generated by background tasks", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Card(colors = CardDefaults.cardColors(containerColor = Color.Green.copy(alpha = 0.15f))) {
+                                        Text("Safe to Delete", modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall, color = Color.Green)
+                                    }
+                                }
+                                Text(formatFileSize(totalLogs), color = SaffronPrimary, fontWeight = FontWeight.Bold)
+                            }
                         }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Temporary Cache Files", fontWeight = FontWeight.SemiBold)
-                            Text(formatFileSize(totalTemp), color = SaffronPrimary, fontWeight = FontWeight.Bold)
+                    }
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("Temporary Cache Files", fontWeight = FontWeight.Bold)
+                                    Text("Extracted caches and scratch folders", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Card(colors = CardDefaults.cardColors(containerColor = Color.Green.copy(alpha = 0.15f))) {
+                                        Text("Safe to Delete", modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall, color = Color.Green)
+                                    }
+                                }
+                                Text(formatFileSize(totalTemp), color = SaffronPrimary, fontWeight = FontWeight.Bold)
+                            }
                         }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Empty Folders Detected", fontWeight = FontWeight.SemiBold)
-                            Text("${junkFiles["empty"]?.size ?: 0} folders", color = Color.Gray)
+                    }
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("Empty Folders", fontWeight = FontWeight.Bold)
+                                    Text("Zero files recursive folders", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Card(colors = CardDefaults.cardColors(containerColor = Color.Green.copy(alpha = 0.15f))) {
+                                        Text("Safe to Delete", modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall, color = Color.Green)
+                                    }
+                                }
+                                Text("$totalEmptyCount folders", color = Color.Gray, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("Residual Orphaned Files", fontWeight = FontWeight.Bold)
+                                    Text("Physical files not indexed in database", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Card(colors = CardDefaults.cardColors(containerColor = SaffronPrimary.copy(alpha = 0.15f))) {
+                                        Text("Review First", modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall, color = SaffronPrimary)
+                                    }
+                                }
+                                Text(formatFileSize(totalResidual), color = SaffronPrimary, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Button(
                     onClick = { viewModel.cleanJunk() },
@@ -1524,11 +1639,26 @@ fun VaultScreen(viewModel: MainViewModel) {
 }
 
 // --- 7. MEDIA CENTER SCREEN ---
+fun formatDuration(ms: Long): String {
+    val sec = (ms / 1000) % 60
+    val min = (ms / (1000 * 60)) % 60
+    val hr = (ms / (1000 * 60 * 60))
+    return if (hr > 0) {
+        String.format("%d:%02d:%02d", hr, min, sec)
+    } else {
+        String.format("%d:%02d", min, sec)
+    }
+}
+
 @Composable
 fun MediaCenterScreen(viewModel: MainViewModel) {
     val images by viewModel.mediaImages.collectAsState()
     val videos by viewModel.mediaVideos.collectAsState()
     val audio by viewModel.mediaAudio.collectAsState()
+
+    val pagedImages = viewModel.pagedMediaImages.collectAsLazyPagingItems()
+    val pagedVideos = viewModel.pagedMediaVideos.collectAsLazyPagingItems()
+    val pagedAudio = viewModel.pagedMediaAudio.collectAsLazyPagingItems()
 
     var selectedTab by remember { mutableStateOf(0) }
 
@@ -1550,7 +1680,7 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
         when (selectedTab) {
             0 -> {
                 // Images Grid
-                if (images.isEmpty()) {
+                if (pagedImages.itemCount == 0) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("No Images Found.", color = Color.Gray)
                     }
@@ -1561,7 +1691,8 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(images) { img ->
+                        items(pagedImages.itemCount) { index ->
+                            val img = pagedImages[index] ?: return@items
                             Box(
                                 modifier = Modifier
                                     .aspectRatio(1f)
@@ -1577,6 +1708,15 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    if (img.width != null && img.height != null) {
+                                        Text(
+                                            "${img.width}x${img.height}",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                            color = Color.Gray,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1585,13 +1725,14 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
             }
             1 -> {
                 // Videos List
-                if (videos.isEmpty()) {
+                if (pagedVideos.itemCount == 0) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("No Videos Found.", color = Color.Gray)
                     }
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                        items(videos) { vid ->
+                        items(pagedVideos.itemCount) { index ->
+                            val vid = pagedVideos[index] ?: return@items
                             Card(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                             ) {
@@ -1600,7 +1741,9 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
                                     Spacer(modifier = Modifier.width(16.dp))
                                     Column {
                                         Text(vid.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("${formatFileSize(vid.size)} • Video", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                        val durationStr = vid.duration?.let { formatDuration(it) } ?: "Video"
+                                        val resStr = vid.resolution?.let { " • $it" } ?: ""
+                                        Text("${formatFileSize(vid.size)} • $durationStr$resStr", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                                     }
                                 }
                             }
@@ -1610,13 +1753,14 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
             }
             2 -> {
                 // Audio List
-                if (audio.isEmpty()) {
+                if (pagedAudio.itemCount == 0) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("No Audio Found.", color = Color.Gray)
                     }
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                        items(audio) { aud ->
+                        items(pagedAudio.itemCount) { index ->
+                            val aud = pagedAudio[index] ?: return@items
                             Card(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                             ) {
@@ -1625,7 +1769,10 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
                                     Spacer(modifier = Modifier.width(16.dp))
                                     Column {
                                         Text(aud.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("${formatFileSize(aud.size)} • MP3 Audio", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                        val artistStr = aud.artist?.let { " • $it" } ?: ""
+                                        val albumStr = aud.album?.let { " ($it)" } ?: ""
+                                        val durationStr = aud.duration?.let { " • ${formatDuration(it)}" } ?: " • Audio"
+                                        Text("${formatFileSize(aud.size)}$durationStr$artistStr$albumStr", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                                     }
                                 }
                             }
