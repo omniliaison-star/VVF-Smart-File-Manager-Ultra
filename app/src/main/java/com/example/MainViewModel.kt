@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.database.AppDatabase
 import com.example.data.database.DbSearchHistory
+import com.example.data.database.CategoryEntity
 import com.example.data.model.FileItem
 import com.example.data.repository.FileRepository
 import com.example.data.repository.VaultRepository
@@ -16,6 +17,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 sealed class Screen {
@@ -43,8 +46,24 @@ data class CloudFile(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = AppDatabase.getDatabase(application)
-    val fileRepository = FileRepository(application, database.fileDao(), database.embeddingDao())
+    val fileRepository = FileRepository(
+        application, 
+        database.fileDao(), 
+        database.embeddingDao(),
+        database.categoryEntityDao(),
+        database.secureStateEntityDao()
+    )
     val vaultRepository = VaultRepository(application, fileRepository)
+
+    val allCategories: StateFlow<List<CategoryEntity>> = fileRepository.allCategories
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    private val _selectedCategoryFilter = MutableStateFlow<String?>(null)
+    val selectedCategoryFilter: StateFlow<String?> = _selectedCategoryFilter.asStateFlow()
 
     // UI Screen navigation State
     private val _currentScreen = MutableStateFlow<Screen>(Screen.Dashboard)
@@ -96,6 +115,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _scanningDuplicates = MutableStateFlow(false)
     val scanningDuplicates: StateFlow<Boolean> = _scanningDuplicates.asStateFlow()
+
+    private val _semanticDuplicates = MutableStateFlow<Map<String, List<FileItem>>>(emptyMap())
+    val semanticDuplicates: StateFlow<Map<String, List<FileItem>>> = _semanticDuplicates.asStateFlow()
+
+    private val _scanningSemanticDuplicates = MutableStateFlow(false)
+    val scanningSemanticDuplicates: StateFlow<Boolean> = _scanningSemanticDuplicates.asStateFlow()
 
     // Junk Cleaner State
     private val _junkFiles = MutableStateFlow<Map<String, List<FileItem>>>(emptyMap())
@@ -188,6 +213,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshStorageInfo()
         triggerBackgroundScanning()
         loadChatMessages()
+        loadCachedDuplicates()
         _selectedCloudAccount.value?.let { generateSimulatedCloudFiles(it) }
     }
 
@@ -218,9 +244,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // --- EXPLORER METHODS ---
     fun loadExplorerFiles(path: String) {
         viewModelScope.launch {
+            _selectedCategoryFilter.value = null
             _currentPath.value = path
             _explorerFiles.value = fileRepository.getFilesAndFolders(path)
             _selectedFiles.value = emptySet()
+        }
+    }
+
+    fun setCategoryFilter(categoryName: String?) {
+        _selectedCategoryFilter.value = categoryName
+        if (categoryName != null) {
+            viewModelScope.launch {
+                _explorerFiles.value = fileRepository.getFilesByCategory(categoryName)
+                _selectedFiles.value = emptySet()
+                _currentScreen.value = Screen.Explorer
+            }
+        } else {
+            loadExplorerFiles("")
         }
     }
 
@@ -384,8 +424,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun scanForDuplicates() {
         viewModelScope.launch {
             _scanningDuplicates.value = true
-            _duplicates.value = fileRepository.findDuplicates()
+            val exact = fileRepository.findDuplicates()
+            _duplicates.value = exact
+            fileRepository.saveDuplicatesCache(exact)
             _scanningDuplicates.value = false
+            
+            _scanningSemanticDuplicates.value = true
+            val semantic = fileRepository.findSemanticDuplicates()
+            _semanticDuplicates.value = semantic
+            fileRepository.saveSemanticDuplicatesCache(semantic)
+            _scanningSemanticDuplicates.value = false
+        }
+    }
+
+    fun loadCachedDuplicates() {
+        viewModelScope.launch {
+            _duplicates.value = fileRepository.getCachedDuplicates()
+            _semanticDuplicates.value = fileRepository.getCachedSemanticDuplicates()
         }
     }
 

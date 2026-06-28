@@ -10,6 +10,10 @@ import com.example.data.database.DbEmbedding
 import com.example.data.database.DbFile
 import com.example.data.database.FileDao
 import com.example.data.database.EmbeddingDao
+import com.example.data.database.CategoryEntityDao
+import com.example.data.database.CategoryEntity
+import com.example.data.database.SecureStateEntity
+import com.example.data.database.SecureStateEntityDao
 import com.example.data.model.FileItem
 import com.example.util.EncryptionHelper
 import com.example.util.GeminiService
@@ -27,9 +31,13 @@ import kotlinx.coroutines.withContext
 class FileRepository(
     private val context: Context,
     private val fileDao: FileDao,
-    private val embeddingDao: EmbeddingDao
+    private val embeddingDao: EmbeddingDao,
+    private val categoryEntityDao: CategoryEntityDao,
+    private val secureStateEntityDao: SecureStateEntityDao
 ) {
     private val TAG = "FileRepository"
+    
+    val allCategories: Flow<List<CategoryEntity>> = categoryEntityDao.getAllCategories()
     
     // Sandbox root directory for file manager operations
     val sandboxRoot: File by lazy {
@@ -356,6 +364,42 @@ class FileRepository(
         }
     }
 
+    fun classifyFile(file: DbFile): String {
+        val path = file.path
+        val mimeType = file.mimeType.lowercase()
+        val name = file.name.lowercase()
+
+        return when {
+            path.contains("WhatsApp/Media", ignoreCase = true) -> "WhatsApp Media"
+            path.contains("Screenshots", ignoreCase = true) -> "Screenshots"
+            mimeType.startsWith("image/") -> "Photos"
+            mimeType.startsWith("video/") -> "Videos"
+            mimeType.startsWith("audio/") -> "Audio"
+            mimeType == "application/vnd.android.package-archive" || name.endsWith(".apk") -> "APK"
+            path.contains("download", ignoreCase = true) || path.contains("downloads", ignoreCase = true) -> "Downloads"
+            mimeType.contains("zip") || mimeType.contains("tar") || mimeType.contains("rar") || mimeType.contains("gzip") ||
+                    name.endsWith(".zip") || name.endsWith(".tar") || name.endsWith(".gz") || name.endsWith(".rar") || name.endsWith(".7z") -> "Archives"
+            else -> "Documents"
+        }
+    }
+
+    suspend fun getFilesByCategory(categoryName: String): List<FileItem> = withContext(Dispatchers.IO) {
+        val allDbFiles = fileDao.getAllFilesList()
+        return@withContext allDbFiles.filter { dbFile ->
+            classifyFile(dbFile) == categoryName
+        }.map { dbFile ->
+            FileItem(
+                id = dbFile.path,
+                name = dbFile.name,
+                path = dbFile.path,
+                size = dbFile.size,
+                isDirectory = false,
+                mimeType = dbFile.mimeType,
+                lastModified = dbFile.modifiedAt
+            )
+        }
+    }
+
     /**
      * Index files in background and insert to DB
      */
@@ -381,6 +425,10 @@ class FileRepository(
             // Clear current records in db to refresh index
             fileDao.clearAllFiles()
             
+            val categories = listOf("Photos", "Videos", "Audio", "Documents", "Archives", "APK", "Downloads", "Screenshots", "WhatsApp Media")
+            val counts = categories.associateWith { 0 }.toMutableMap()
+            val sizes = categories.associateWith { 0L }.toMutableMap()
+
             allFiles.forEachIndexed { index, file ->
                 val dbFile = DbFile(
                     path = file.absolutePath,
@@ -391,6 +439,11 @@ class FileRepository(
                     modifiedAt = file.lastModified()
                 )
                 val id = fileDao.insertFile(dbFile)
+
+                // Classify
+                val category = classifyFile(dbFile)
+                counts[category] = (counts[category] ?: 0) + 1
+                sizes[category] = (sizes[category] ?: 0L) + dbFile.size
 
                 // If Gemini API Key is available, fetch embedding for documents
                 if (GeminiService.isApiKeyAvailable() && (dbFile.mimeType.contains("text") || dbFile.mimeType.contains("pdf"))) {
@@ -408,6 +461,19 @@ class FileRepository(
                 
                 onProgress(index + 1, total)
             }
+
+            // After classification, upsert aggregated counts/sizes into CategoryEntity
+            categoryEntityDao.clearAll()
+            categories.forEach { categoryName ->
+                categoryEntityDao.insertCategory(
+                    CategoryEntity(
+                        name = categoryName,
+                        fileCount = counts[categoryName] ?: 0,
+                        totalSize = sizes[categoryName] ?: 0L
+                    )
+                )
+            }
+
             Log.d(TAG, "File indexing complete!")
         } catch (e: Exception) {
             Log.e(TAG, "Error indexing files: ${e.message}", e)
@@ -475,6 +541,154 @@ class FileRepository(
         }
 
         return@withContext duplicatesMap
+    }
+
+    suspend fun getCachedDuplicates(): Map<String, List<FileItem>> = withContext(Dispatchers.IO) {
+        try {
+            val entity = secureStateEntityDao.getValue("duplicates_cache") ?: return@withContext emptyMap()
+            val moshi = com.squareup.moshi.Moshi.Builder()
+                .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
+                .build()
+            val type = com.squareup.moshi.Types.newParameterizedType(
+                Map::class.java,
+                String::class.java,
+                com.squareup.moshi.Types.newParameterizedType(List::class.java, FileItem::class.java)
+            )
+            val adapter = moshi.adapter<Map<String, List<FileItem>>>(type)
+            return@withContext adapter.fromJson(entity.value) ?: emptyMap()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed reading cached duplicates", e)
+            return@withContext emptyMap()
+        }
+    }
+
+    suspend fun saveDuplicatesCache(duplicates: Map<String, List<FileItem>>) = withContext(Dispatchers.IO) {
+        try {
+            val moshi = com.squareup.moshi.Moshi.Builder()
+                .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
+                .build()
+            val type = com.squareup.moshi.Types.newParameterizedType(
+                Map::class.java,
+                String::class.java,
+                com.squareup.moshi.Types.newParameterizedType(List::class.java, FileItem::class.java)
+            )
+            val adapter = moshi.adapter<Map<String, List<FileItem>>>(type)
+            val json = adapter.toJson(duplicates)
+            secureStateEntityDao.insertValue(SecureStateEntity("duplicates_cache", json))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed saving duplicates cache", e)
+        }
+    }
+
+    suspend fun getCachedSemanticDuplicates(): Map<String, List<FileItem>> = withContext(Dispatchers.IO) {
+        try {
+            val entity = secureStateEntityDao.getValue("semantic_duplicates_cache") ?: return@withContext emptyMap()
+            val moshi = com.squareup.moshi.Moshi.Builder()
+                .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
+                .build()
+            val type = com.squareup.moshi.Types.newParameterizedType(
+                Map::class.java,
+                String::class.java,
+                com.squareup.moshi.Types.newParameterizedType(List::class.java, FileItem::class.java)
+            )
+            val adapter = moshi.adapter<Map<String, List<FileItem>>>(type)
+            return@withContext adapter.fromJson(entity.value) ?: emptyMap()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed reading cached semantic duplicates", e)
+            return@withContext emptyMap()
+        }
+    }
+
+    suspend fun saveSemanticDuplicatesCache(duplicates: Map<String, List<FileItem>>) = withContext(Dispatchers.IO) {
+        try {
+            val moshi = com.squareup.moshi.Moshi.Builder()
+                .addLast(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
+                .build()
+            val type = com.squareup.moshi.Types.newParameterizedType(
+                Map::class.java,
+                String::class.java,
+                com.squareup.moshi.Types.newParameterizedType(List::class.java, FileItem::class.java)
+            )
+            val adapter = moshi.adapter<Map<String, List<FileItem>>>(type)
+            val json = adapter.toJson(duplicates)
+            secureStateEntityDao.insertValue(SecureStateEntity("semantic_duplicates_cache", json))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed saving semantic duplicates cache", e)
+        }
+    }
+
+    suspend fun findSemanticDuplicates(): Map<String, List<FileItem>> = withContext(Dispatchers.IO) {
+        if (!GeminiService.isApiKeyAvailable()) {
+            return@withContext emptyMap()
+        }
+        val semanticGroups = mutableMapOf<String, MutableList<FileItem>>()
+        try {
+            val dbEmbeddings = embeddingDao.getAllEmbeddings()
+            if (dbEmbeddings.size < 2) return@withContext emptyMap()
+
+            // Resolve file IDs to DbFiles and calculate MD5s to make comparisons robust
+            val resolvedEmbeddings = dbEmbeddings.mapNotNull { dbEmb ->
+                val dbFile = fileDao.getFileById(dbEmb.fileId) ?: return@mapNotNull null
+                val file = File(dbFile.path)
+                if (!file.exists()) return@mapNotNull null
+                val md5 = calculateMD5(file)
+                val vector = dbEmb.vectorData.split(",").map { it.toFloat() }.toFloatArray()
+                Triple(dbFile, md5, vector)
+            }
+
+            val processedIds = mutableSetOf<Long>()
+
+            for (i in resolvedEmbeddings.indices) {
+                val (fileA, md5A, vectorA) = resolvedEmbeddings[i]
+                if (processedIds.contains(fileA.id)) continue
+
+                val group = mutableListOf<FileItem>()
+                val itemA = FileItem(
+                    id = fileA.path,
+                    name = fileA.name,
+                    path = fileA.path,
+                    size = fileA.size,
+                    isDirectory = false,
+                    mimeType = fileA.mimeType,
+                    lastModified = fileA.modifiedAt
+                )
+
+                for (j in i + 1 until resolvedEmbeddings.size) {
+                    val (fileB, md5B, vectorB) = resolvedEmbeddings[j]
+                    if (processedIds.contains(fileB.id)) continue
+                    
+                    // Skip if they are exact duplicates (same MD5)
+                    if (md5A.isNotEmpty() && md5A == md5B) continue
+
+                    // Compare cosine similarity
+                    val score = GeminiService.cosineSimilarity(vectorA, vectorB)
+                    if (score >= 0.92f) {
+                        if (group.isEmpty()) {
+                            group.add(itemA)
+                            processedIds.add(fileA.id)
+                        }
+                        group.add(FileItem(
+                            id = fileB.path,
+                            name = fileB.name,
+                            path = fileB.path,
+                            size = fileB.size,
+                            isDirectory = false,
+                            mimeType = fileB.mimeType,
+                            lastModified = fileB.modifiedAt
+                        ))
+                        processedIds.add(fileB.id)
+                    }
+                }
+
+                if (group.isNotEmpty()) {
+                    // Use fileA path as the group key
+                    semanticGroups[fileA.path] = group
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finding semantic duplicates: ${e.message}", e)
+        }
+        return@withContext semanticGroups
     }
 
     /**

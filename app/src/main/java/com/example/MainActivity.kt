@@ -17,11 +17,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Schedule periodic background junk cleanup using WorkManager
+        // Schedule periodic background tasks using WorkManager
         try {
             val constraints = androidx.work.Constraints.Builder()
                 .setRequiresBatteryNotLow(true)
                 .build()
+
+            // 1. Junk cleanup (daily)
             val cleanupRequest = androidx.work.PeriodicWorkRequestBuilder<com.example.util.JunkCleanWorker>(
                 1, java.util.concurrent.TimeUnit.DAYS
             )
@@ -31,6 +33,30 @@ class MainActivity : ComponentActivity() {
                 "JunkCleanupWork",
                 androidx.work.ExistingPeriodicWorkPolicy.KEEP,
                 cleanupRequest
+            )
+
+            // 2. Sandbox file index scan (every 6 hours)
+            val scanRequest = androidx.work.PeriodicWorkRequestBuilder<com.example.util.BackgroundScanWorker>(
+                6, java.util.concurrent.TimeUnit.HOURS
+            )
+                .setConstraints(constraints)
+                .build()
+            androidx.work.WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+                "BackgroundScanWork",
+                androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+                scanRequest
+            )
+
+            // 3. Duplicate finder scan (daily)
+            val duplicateRequest = androidx.work.PeriodicWorkRequestBuilder<com.example.util.DuplicateScanWorker>(
+                1, java.util.concurrent.TimeUnit.DAYS
+            )
+                .setConstraints(constraints)
+                .build()
+            androidx.work.WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+                "DuplicateScanWork",
+                androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+                duplicateRequest
             )
         } catch (e: Exception) {
             e.printStackTrace()

@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -246,6 +247,61 @@ fun DashboardScreen(viewModel: MainViewModel) {
             }
         }
 
+        // Smart Categories Row / Grid
+        item {
+            val categories by viewModel.allCategories.collectAsState()
+            Text(
+                text = "Smart Categories",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            if (categories.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Box(modifier = Modifier.padding(16.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text("No categories indexed. Run file explorer scan.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+                    }
+                }
+            } else {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(categories) { category ->
+                        val icon = when (category.name) {
+                            "Photos" -> Icons.Default.Folder
+                            "Videos" -> Icons.Default.PlayArrow
+                            "Audio" -> Icons.Default.PlayArrow
+                            "APK" -> Icons.Default.Settings
+                            else -> Icons.Default.Folder
+                        }
+                        Card(
+                            modifier = Modifier
+                                .width(130.dp)
+                                .clickable { viewModel.setCategoryFilter(category.name) }
+                                .testTag("category_${category.name.lowercase().replace(" ", "_")}"),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalAlignment = Alignment.Start
+                            ) {
+                                Icon(icon, contentDescription = category.name, tint = SaffronPrimary, modifier = Modifier.size(24.dp))
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(category.name, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${category.fileCount} files", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                Text(formatFileSize(category.totalSize), style = MaterialTheme.typography.labelSmall, color = SaffronPrimary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Quick Actions Grid
         item {
             Text(
@@ -316,6 +372,7 @@ fun ExplorerScreen(viewModel: MainViewModel) {
     val files by viewModel.explorerFiles.collectAsState()
     val selected by viewModel.selectedFiles.collectAsState()
     val clipboard by viewModel.clipboard.collectAsState()
+    val selectedCategoryFilter by viewModel.selectedCategoryFilter.collectAsState()
 
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
@@ -334,22 +391,34 @@ fun ExplorerScreen(viewModel: MainViewModel) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(
-                onClick = { viewModel.navigateUp() },
-                enabled = !viewModel.isAtSandboxRoot()
+                onClick = { 
+                    if (selectedCategoryFilter != null) {
+                        viewModel.setCategoryFilter(null)
+                    } else {
+                        viewModel.navigateUp() 
+                    }
+                },
+                enabled = selectedCategoryFilter != null || !viewModel.isAtSandboxRoot()
             ) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "Back")
             }
 
             Text(
-                text = if (currentPath.isEmpty()) "VVF_Smart_Explorer" else File(currentPath).name,
+                text = selectedCategoryFilter?.let { "Category: $it" } ?: (if (currentPath.isEmpty()) "VVF_Smart_Explorer" else File(currentPath).name),
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
 
-            IconButton(onClick = { showCreateFolderDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Create Folder", tint = SaffronPrimary)
+            if (selectedCategoryFilter != null) {
+                IconButton(onClick = { viewModel.setCategoryFilter(null) }) {
+                    Icon(Icons.Default.Close, contentDescription = "Clear Filter", tint = SaffronPrimary)
+                }
+            } else {
+                IconButton(onClick = { showCreateFolderDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "Create Folder", tint = SaffronPrimary)
+                }
             }
 
             if (selected.isNotEmpty()) {
@@ -888,10 +957,15 @@ fun SearchScreen(viewModel: MainViewModel) {
 }
 
 // --- 4. DUPLICATES CLEANER SCREEN ---
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DuplicatesScreen(viewModel: MainViewModel) {
     val duplicates by viewModel.duplicates.collectAsState()
+    val semanticDuplicates by viewModel.semanticDuplicates.collectAsState()
     val isScanning by viewModel.scanningDuplicates.collectAsState()
+    val isScanningSemantic by viewModel.scanningSemanticDuplicates.collectAsState()
+    
+    var selectedTab by remember { mutableStateOf(0) } // 0 = Exact, 1 = Semantic
 
     Column(
         modifier = Modifier
@@ -920,76 +994,223 @@ fun DuplicatesScreen(viewModel: MainViewModel) {
             }
         }
 
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Tab selection
+        TabRow(
+            selectedTabIndex = selectedTab,
+            containerColor = Color.Transparent,
+            contentColor = SaffronPrimary
+        ) {
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                text = { Text("Exact (${duplicates.values.flatten().size})", fontWeight = FontWeight.Bold) }
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                text = { Text("Semantic (AI)", fontWeight = FontWeight.Bold) }
+            )
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (isScanning) {
+        if (isScanning || isScanningSemantic) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = SaffronPrimary)
-            }
-        } else if (duplicates.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.Check, contentDescription = "No Duplicates", tint = Color.Green, modifier = Modifier.size(64.dp))
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Clean storage! No duplicate files found.", fontWeight = FontWeight.Bold)
+                    CircularProgressIndicator(color = SaffronPrimary)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = if (isScanning) "Scanning byte-identical duplicates..." else "Comparing file embeddings...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+            }
+        } else if (selectedTab == 0) {
+            // Exact duplicates list
+            if (duplicates.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Check, contentDescription = "No Duplicates", tint = Color.Green, modifier = Modifier.size(64.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Clean storage! No exact duplicate files found.", fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    duplicates.forEach { (hash, groupFiles) ->
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "Duplicate Group (MD5: ${hash.take(8)})",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                        color = SaffronPrimary
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    groupFiles.forEach { file ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    file.name,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    file.path.removePrefix(viewModel.fileRepository.sandboxRoot.absolutePath),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = Color.Gray,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    formatFileSize(file.size),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = Color.Gray
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                IconButton(onClick = { viewModel.deleteDuplicate(file.path) }) {
+                                                    Icon(Icons.Default.Delete, contentDescription = "Delete Copy", tint = Color.Red)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                duplicates.forEach { (hash, groupFiles) ->
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            // Semantic duplicates list
+            val isApiKeyAvailable = com.example.util.GeminiService.isApiKeyAvailable()
+            if (!isApiKeyAvailable) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = "Duplicate Group (MD5: ${hash.take(8)})",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                    color = SaffronPrimary
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                groupFiles.forEach { file ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                file.name,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            Text(
-                                                file.path.removePrefix(viewModel.fileRepository.sandboxRoot.absolutePath),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = Color.Gray,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                formatFileSize(file.size),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = Color.Gray
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            IconButton(onClick = { viewModel.deleteDuplicate(file.path) }) {
-                                                Icon(Icons.Default.Delete, contentDescription = "Delete Copy", tint = Color.Red)
+                            Icon(Icons.Default.Lock, contentDescription = "Gemini Key Required", tint = SaffronPrimary, modifier = Modifier.size(48.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "Gemini AI Key Required",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "Semantic scanning compares file embeddings to identify visually or semantically similar documents, recompressed images, or drafting revisions. Please provide a Gemini API Key in Settings to unlock this feature.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.Gray,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(
+                                onClick = { viewModel.navigateTo(Screen.Settings) },
+                                colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary)
+                            ) {
+                                Text("Go to Settings")
+                            }
+                        }
+                    }
+                }
+            } else if (semanticDuplicates.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Check, contentDescription = "No Duplicates", tint = Color.Green, modifier = Modifier.size(64.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("No near-duplicate or semantically similar files found.", fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    semanticDuplicates.forEach { (mainPath, groupFiles) ->
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "AI Near-Duplicate Group",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                        color = SaffronPrimary
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    groupFiles.forEach { file ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    file.name,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    file.path.removePrefix(viewModel.fileRepository.sandboxRoot.absolutePath),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = Color.Gray,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    formatFileSize(file.size),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = Color.Gray
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                IconButton(onClick = { viewModel.deleteDuplicate(file.path) }) {
+                                                    Icon(Icons.Default.Delete, contentDescription = "Delete Copy", tint = Color.Red)
+                                                }
                                             }
                                         }
                                     }

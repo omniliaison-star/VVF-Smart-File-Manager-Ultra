@@ -19,7 +19,7 @@ class JunkCleanWorker(
         Log.d("JunkCleanWorker", "Starting background periodic junk cleanup...")
         try {
             val db = AppDatabase.getDatabase(applicationContext)
-            val fileRepository = FileRepository(applicationContext, db.fileDao(), db.embeddingDao())
+            val fileRepository = FileRepository(applicationContext, db.fileDao(), db.embeddingDao(), db.categoryEntityDao(), db.secureStateEntityDao())
             
             // Run standard scan
             val junkMap = fileRepository.scanJunk()
