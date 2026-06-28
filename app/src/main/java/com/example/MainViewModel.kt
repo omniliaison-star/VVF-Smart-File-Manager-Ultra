@@ -27,7 +27,18 @@ sealed class Screen {
     object Vault : Screen()
     object MediaCenter : Screen()
     object Settings : Screen()
+    object CloudManager : Screen()
+    object AIAssistant : Screen()
 }
+
+data class CloudFile(
+    val id: String,
+    val name: String,
+    val size: Long,
+    val mimeType: String,
+    val lastModified: Long,
+    val category: String = "Other"
+)
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -120,11 +131,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _storageTotalSpace = MutableStateFlow(0L)
     val storageTotalSpace: StateFlow<Long> = _storageTotalSpace.asStateFlow()
 
+    // Google Drive / Cloud Sim State
+    private val _cloudAccounts = MutableStateFlow<List<String>>(listOf("personal.cloud@gmail.com", "work.drive@corporate.com"))
+    val cloudAccounts: StateFlow<List<String>> = _cloudAccounts.asStateFlow()
+
+    private val _selectedCloudAccount = MutableStateFlow<String?>("personal.cloud@gmail.com")
+    val selectedCloudAccount: StateFlow<String?> = _selectedCloudAccount.asStateFlow()
+
+    private val _cloudFiles = MutableStateFlow<List<CloudFile>>(emptyList())
+    val cloudFiles: StateFlow<List<CloudFile>> = _cloudFiles.asStateFlow()
+
+    private val _selectedCloudFiles = MutableStateFlow<Set<String>>(emptySet())
+    val selectedCloudFiles: StateFlow<Set<String>> = _selectedCloudFiles.asStateFlow()
+
+    private val _cloudSearchQuery = MutableStateFlow("")
+    val cloudSearchQuery: StateFlow<String> = _cloudSearchQuery.asStateFlow()
+
+    // Semantic Scan State
+    private val _semanticScanProgress = MutableStateFlow(0f)
+    val semanticScanProgress: StateFlow<Float> = _semanticScanProgress.asStateFlow()
+
+    private val _semanticScanStatus = MutableStateFlow("")
+    val semanticScanStatus: StateFlow<String> = _semanticScanStatus.asStateFlow()
+
+    private val _semanticScanMatchPercent = MutableStateFlow(0)
+    val semanticScanMatchPercent: StateFlow<Int> = _semanticScanMatchPercent.asStateFlow()
+
+    private val _isScanningSemantic = MutableStateFlow(false)
+    val isScanningSemantic: StateFlow<Boolean> = _isScanningSemantic.asStateFlow()
+
+    // AI Assistant State
+    private val _chatMessages = MutableStateFlow<List<com.example.data.database.ChatMessageEntity>>(emptyList())
+    val chatMessages: StateFlow<List<com.example.data.database.ChatMessageEntity>> = _chatMessages.asStateFlow()
+
+    private val _isHighThinkingEnabled = MutableStateFlow(false)
+    val isHighThinkingEnabled: StateFlow<Boolean> = _isHighThinkingEnabled.asStateFlow()
+
+    private val _apiKeyInput = MutableStateFlow("")
+    val apiKeyInput: StateFlow<String> = _apiKeyInput.asStateFlow()
+
+    private val _isSendingMessage = MutableStateFlow(false)
+    val isSendingMessage: StateFlow<Boolean> = _isSendingMessage.asStateFlow()
+
     init {
+        // Load API override key
+        val prefs = application.getSharedPreferences("vvf_api_prefs", android.content.Context.MODE_PRIVATE)
+        val savedKey = prefs.getString("gemini_api_key_override", "") ?: ""
+        _apiKeyInput.value = savedKey
+        GeminiService.setOverriddenKey(savedKey)
+
+        val savedHighThinking = prefs.getBoolean("gemini_high_thinking", false)
+        _isHighThinkingEnabled.value = savedHighThinking
+
         navigateTo(Screen.Dashboard)
         loadSearchHistory()
         refreshStorageInfo()
         triggerBackgroundScanning()
+        loadChatMessages()
+        _selectedCloudAccount.value?.let { generateSimulatedCloudFiles(it) }
     }
 
     fun navigateTo(screen: Screen) {
@@ -136,6 +200,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is Screen.Vault -> loadVault()
             is Screen.Duplicates -> scanForDuplicates()
             is Screen.JunkCleaner -> scanForJunk()
+            is Screen.CloudManager -> _selectedCloudAccount.value?.let { generateSimulatedCloudFiles(it) }
             else -> {}
         }
         refreshStorageInfo()
@@ -494,5 +559,158 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _isIndexing.value = false
         }
+    }
+
+    // --- CLOUD MANAGER METHODS ---
+    fun selectCloudAccount(account: String) {
+        _selectedCloudAccount.value = account
+        _selectedCloudFiles.value = emptySet()
+        generateSimulatedCloudFiles(account)
+    }
+
+    fun addCloudAccount(account: String) {
+        if (account.trim().isNotEmpty() && !_cloudAccounts.value.contains(account.trim())) {
+            _cloudAccounts.value = _cloudAccounts.value + account.trim()
+            selectCloudAccount(account.trim())
+        }
+    }
+
+    fun logoutCloudAccount(account: String) {
+        _cloudAccounts.value = _cloudAccounts.value.filter { it != account }
+        if (_selectedCloudAccount.value == account) {
+            _selectedCloudAccount.value = _cloudAccounts.value.firstOrNull()
+            _selectedCloudAccount.value?.let { generateSimulatedCloudFiles(it) } ?: run { _cloudFiles.value = emptyList() }
+        }
+    }
+
+    fun toggleCloudFileSelection(id: String) {
+        val currentSet = _selectedCloudFiles.value.toMutableSet()
+        if (currentSet.contains(id)) {
+            currentSet.remove(id)
+        } else {
+            currentSet.add(id)
+        }
+        _selectedCloudFiles.value = currentSet
+    }
+
+    fun selectAllCloudFiles() {
+        val allIds = filteredCloudFiles().map { it.id }.toSet()
+        _selectedCloudFiles.value = allIds
+    }
+
+    fun deleteSelectedCloudFiles() {
+        val selected = _selectedCloudFiles.value
+        _cloudFiles.value = _cloudFiles.value.filter { !selected.contains(it.id) }
+        _selectedCloudFiles.value = emptySet()
+    }
+
+    fun deleteSingleCloudFile(id: String) {
+        _cloudFiles.value = _cloudFiles.value.filter { it.id != id }
+        _selectedCloudFiles.value = _selectedCloudFiles.value.filter { it != id }.toSet()
+    }
+
+    fun updateCloudSearchQuery(query: String) {
+        _cloudSearchQuery.value = query
+    }
+
+    fun filteredCloudFiles(): List<CloudFile> {
+        val query = _cloudSearchQuery.value.trim()
+        if (query.isEmpty()) return _cloudFiles.value
+        return _cloudFiles.value.filter { it.name.contains(query, ignoreCase = true) }
+    }
+
+    fun generateSimulatedCloudFiles(account: String) {
+        val isWork = account.contains("work") || account.contains("corporate")
+        _cloudFiles.value = if (isWork) {
+            listOf(
+                CloudFile("c1", "Q3 Financial Performance.xlsx", 24 * 1024 * 1024L, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", System.currentTimeMillis() - 48000000, "Documents"),
+                CloudFile("c2", "AI Deep Learning Strategy 2026.pdf", 8 * 1024 * 1024L, "application/pdf", System.currentTimeMillis() - 86000000, "Documents"),
+                CloudFile("c3", "Quantum Computing Project Spec.txt", 45000L, "text/plain", System.currentTimeMillis() - 150000000, "Documents"),
+                CloudFile("c4", "Enterprise Architecture Diagram.png", 3 * 1024 * 1024L, "image/png", System.currentTimeMillis() - 320000000, "Images"),
+                CloudFile("c5", "Corporate All Hands Audio.mp3", 42 * 1024 * 1024L, "audio/mpeg", System.currentTimeMillis() - 600000000, "Audio")
+            )
+        } else {
+            listOf(
+                CloudFile("c1", "Family Vacation Photos.zip", 450 * 1024 * 1024L, "application/zip", System.currentTimeMillis() - 120000000, "Archives"),
+                CloudFile("c2", "Guitar Solo Practice.wav", 18 * 1024 * 1024L, "audio/wav", System.currentTimeMillis() - 320000000, "Audio"),
+                CloudFile("c3", "My Resume.docx", 120000L, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", System.currentTimeMillis() - 500000000, "Documents"),
+                CloudFile("c4", "Cute Cat Video.mp4", 85 * 1024 * 1024L, "video/mp4", System.currentTimeMillis() - 900000000, "Videos"),
+                CloudFile("c5", "Groceries Budget list.xlsx", 85000L, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", System.currentTimeMillis() - 12000000, "Documents")
+            )
+        }
+    }
+
+    fun startSemanticScan() {
+        viewModelScope.launch {
+            _isScanningSemantic.value = true
+            _semanticScanProgress.value = 0f
+            _semanticScanMatchPercent.value = 0
+            val stages = listOf(
+                "Connecting to cloud node...",
+                "Retrieving file schema metadata...",
+                "Downloading semantic hashes...",
+                "Comparing neural embeddings...",
+                "Finalizing match index..."
+            )
+            for (i in stages.indices) {
+                _semanticScanStatus.value = stages[i]
+                for (p in 1..20) {
+                    kotlinx.coroutines.delay(30)
+                    _semanticScanProgress.value += 0.01f
+                }
+            }
+            _semanticScanProgress.value = 1.0f
+            _semanticScanMatchPercent.value = (72..98).random()
+            _semanticScanStatus.value = "Semantic scan complete. Sync similarity verified."
+            _isScanningSemantic.value = false
+        }
+    }
+
+    // --- AI ASSISTANT & CHAT PERSISTENCE METHODS ---
+    fun loadChatMessages() {
+        viewModelScope.launch {
+            database.chatMessageEntityDao().getAllChatMessages().collect {
+                _chatMessages.value = it
+            }
+        }
+    }
+
+    fun sendMessageToAssistant(text: String) {
+        if (text.trim().isEmpty()) return
+        viewModelScope.launch {
+            _isSendingMessage.value = true
+            val userMsg = com.example.data.database.ChatMessageEntity(role = "user", content = text)
+            database.chatMessageEntityDao().insertChatMessage(userMsg)
+
+            val prompt = "You are VVF Smart File Assistant, an expert AI embedded directly in the Smart File & Cloud Manager. " +
+                    "The user is asking a question or request: \"$text\". " +
+                    "Answer them with highly precise, smart, and friendly assistance."
+            
+            val systemIns = "Always be exceptionally helpful, concise, and professional. Address file manager features like Encryption, Cleaners, Search when appropriate."
+            val response = GeminiService.generateResponse(prompt, systemInstruction = systemIns, useHighThinking = _isHighThinkingEnabled.value)
+            
+            val modelMsg = com.example.data.database.ChatMessageEntity(role = "model", content = response)
+            database.chatMessageEntityDao().insertChatMessage(modelMsg)
+            _isSendingMessage.value = false
+        }
+    }
+
+    fun clearAllChatHistory() {
+        viewModelScope.launch {
+            database.chatMessageEntityDao().clearChatMessages()
+        }
+    }
+
+    fun applyApiKeyOverride(key: String) {
+        val prefs = getApplication<Application>().getSharedPreferences("vvf_api_prefs", android.content.Context.MODE_PRIVATE)
+        prefs.edit().putString("gemini_api_key_override", key).apply()
+        _apiKeyInput.value = key
+        GeminiService.setOverriddenKey(key)
+    }
+
+    fun toggleHighThinking(enabled: Boolean) {
+        _isHighThinkingEnabled.value = enabled
+        val prefs = getApplication<Application>().getSharedPreferences("vvf_api_prefs", android.content.Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("gemini_high_thinking", enabled).apply()
     }
 }

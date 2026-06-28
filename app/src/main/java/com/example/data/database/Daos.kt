@@ -71,3 +71,49 @@ interface SearchHistoryDao {
     @Query("DELETE FROM search_history")
     suspend fun clearHistory()
 }
+
+@Dao
+interface FileEntityDao {
+    @Query("SELECT * FROM file_entities ORDER BY name ASC")
+    fun getAllFileEntities(): Flow<List<FileEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFileEntity(entity: FileEntity)
+
+    @Query("DELETE FROM file_entities WHERE path = :path")
+    suspend fun deleteFileEntityByPath(path: String)
+}
+
+@Dao
+interface CategoryEntityDao {
+    @Query("SELECT * FROM category_entities ORDER BY name ASC")
+    fun getAllCategories(): Flow<List<CategoryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertCategory(entity: CategoryEntity)
+
+    @Query("DELETE FROM category_entities")
+    suspend fun clearAll()
+}
+
+@Dao
+interface SecureStateEntityDao {
+    @Query("SELECT * FROM secure_state_entities WHERE `key` = :key")
+    suspend fun getValue(key: String): SecureStateEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertValue(entity: SecureStateEntity)
+}
+
+@Dao
+interface ChatMessageEntityDao {
+    @Query("SELECT * FROM chat_message_entities ORDER BY timestamp ASC")
+    fun getAllChatMessages(): Flow<List<ChatMessageEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertChatMessage(entity: ChatMessageEntity)
+
+    @Query("DELETE FROM chat_message_entities")
+    suspend fun clearChatMessages()
+}
+

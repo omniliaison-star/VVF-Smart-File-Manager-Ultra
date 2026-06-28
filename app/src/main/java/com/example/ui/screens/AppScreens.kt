@@ -77,28 +77,22 @@ fun AppNavigationWrapper(viewModel: MainViewModel) {
                 containerColor = MaterialTheme.colorScheme.surface
             ) {
                 NavigationBarItem(
-                    selected = currentScreen is Screen.Dashboard,
+                    selected = currentScreen is Screen.Dashboard || currentScreen is Screen.Explorer || currentScreen is Screen.Duplicates || currentScreen is Screen.JunkCleaner || currentScreen is Screen.Vault || currentScreen is Screen.MediaCenter,
                     onClick = { viewModel.navigateTo(Screen.Dashboard) },
-                    icon = { Icon(Icons.Default.Home, contentDescription = "Dashboard") },
-                    label = { Text("Dashboard") }
+                    icon = { Icon(Icons.Default.Folder, contentDescription = "Local Files") },
+                    label = { Text("Local Manager") }
                 )
                 NavigationBarItem(
-                    selected = currentScreen is Screen.Explorer,
-                    onClick = { viewModel.navigateTo(Screen.Explorer) },
-                    icon = { Icon(Icons.Default.Folder, contentDescription = "Explorer") },
-                    label = { Text("Explorer") }
+                    selected = currentScreen is Screen.CloudManager,
+                    onClick = { viewModel.navigateTo(Screen.CloudManager) },
+                    icon = { Icon(Icons.Default.Cloud, contentDescription = "Cloud Drive") },
+                    label = { Text("Cloud Manager") }
                 )
                 NavigationBarItem(
-                    selected = currentScreen is Screen.Search,
-                    onClick = { viewModel.navigateTo(Screen.Search) },
-                    icon = { Icon(Icons.Default.Search, contentDescription = "AI Search") },
-                    label = { Text("AI Search") }
-                )
-                NavigationBarItem(
-                    selected = currentScreen is Screen.Vault,
-                    onClick = { viewModel.navigateTo(Screen.Vault) },
-                    icon = { Icon(Icons.Default.Lock, contentDescription = "Vault") },
-                    label = { Text("Vault") }
+                    selected = currentScreen is Screen.AIAssistant,
+                    onClick = { viewModel.navigateTo(Screen.AIAssistant) },
+                    icon = { Icon(Icons.Default.SmartButton, contentDescription = "AI Assistant") },
+                    label = { Text("AI & Config") }
                 )
             }
         }
@@ -138,6 +132,8 @@ fun AppNavigationWrapper(viewModel: MainViewModel) {
                     is Screen.Vault -> VaultScreen(viewModel)
                     is Screen.MediaCenter -> MediaCenterScreen(viewModel)
                     is Screen.Settings -> SettingsScreen(viewModel)
+                    is Screen.CloudManager -> CloudManagerScreen(viewModel)
+                    is Screen.AIAssistant -> AIAssistantScreen(viewModel)
                 }
             }
         }
@@ -1498,3 +1494,578 @@ fun SettingsScreen(viewModel: MainViewModel) {
         }
     }
 }
+
+// --- 9. GOOGLE DRIVE SIM / CLOUD MANAGER ---
+@Composable
+fun CloudManagerScreen(viewModel: MainViewModel) {
+    val cloudAccounts by viewModel.cloudAccounts.collectAsState()
+    val selectedAccount by viewModel.selectedCloudAccount.collectAsState()
+    val cloudFiles = viewModel.filteredCloudFiles()
+    val selectedFiles by viewModel.selectedCloudFiles.collectAsState()
+    val cloudSearchQuery by viewModel.cloudSearchQuery.collectAsState()
+
+    // Semantic scan state
+    val scanProgress by viewModel.semanticScanProgress.collectAsState()
+    val scanStatus by viewModel.semanticScanStatus.collectAsState()
+    val scanMatchPercent by viewModel.semanticScanMatchPercent.collectAsState()
+    val isScanningSemantic by viewModel.isScanningSemantic.collectAsState()
+
+    var showAddAccountDialog by remember { mutableStateOf(false) }
+    var newAccountEmail by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Title
+        Text(
+            text = "Google Drive Sim",
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+            color = SaffronPrimary
+        )
+        Text(
+            text = "Simulated next-gen neural cloud manager",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.Gray
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Multi-account Switcher Panel
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Connected Accounts", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                    IconButton(onClick = { showAddAccountDialog = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Account", tint = SaffronPrimary)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                if (cloudAccounts.isEmpty()) {
+                    Text("No connected cloud drives. Add one below.", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        cloudAccounts.forEach { account ->
+                            val isSelected = account == selectedAccount
+                            Box(
+                                modifier = Modifier
+                                    .background(
+                                        if (isSelected) SaffronPrimary else Color.Transparent,
+                                        RoundedCornerShape(16.dp)
+                                    )
+                                    .background(Color.Transparent)
+                                    .clickable { viewModel.selectCloudAccount(account) }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = account,
+                                        color = if (isSelected) Color.Black else Color.White,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+                                    )
+                                    if (isSelected) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            Icons.Default.Logout,
+                                            contentDescription = "Logout",
+                                            tint = Color.Black,
+                                            modifier = Modifier
+                                                .size(12.dp)
+                                                .clickable { viewModel.logoutCloudAccount(account) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Semantic Scan Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f))
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.AutoAwesome, contentDescription = "AI", tint = SaffronPrimary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "AI Semantic Scan Status",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = SaffronPrimary
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (isScanningSemantic) {
+                    Column {
+                        Text(
+                            text = scanStatus,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SaffronPrimary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        LinearProgressIndicator(
+                            progress = scanProgress,
+                            modifier = Modifier.fillMaxWidth(),
+                            color = SaffronPrimary,
+                            trackColor = SaffronSecondary.copy(alpha = 0.2f)
+                        )
+                    }
+                } else {
+                    Column {
+                        if (scanMatchPercent > 0) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "Similarity Match: $scanMatchPercent%",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = Color.Green
+                                    )
+                                    Text(
+                                        text = "Cloud matches with local indexes verified.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Gray
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .background(Color.Green.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                                        .padding(8.dp)
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = "Verified", tint = Color.Green)
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = "Run a cross-node scan to compare your local directory indexing vectors with the cloud node's schema.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Button(
+                            onClick = { viewModel.startSemanticScan() },
+                            colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Run AI Semantic Scan", fontWeight = FontWeight.Bold, color = Color.Black)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Search Bar & Multi-Select Header
+        OutlinedTextField(
+            value = cloudSearchQuery,
+            onValueChange = { viewModel.updateCloudSearchQuery(it) },
+            label = { Text("Search cloud files...") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = SaffronPrimary, focusedLabelColor = SaffronPrimary),
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${cloudFiles.size} Cloud Files",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+            )
+
+            Row {
+                if (selectedFiles.isNotEmpty()) {
+                    IconButton(onClick = { viewModel.deleteSelectedCloudFiles() }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Selected", tint = Color.Red)
+                    }
+                }
+                TextButton(onClick = { viewModel.selectAllCloudFiles() }) {
+                    Text("Select All", color = SaffronPrimary)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Cloud File List
+        if (selectedAccount == null) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("Select or Add an Account above.", color = Color.Gray)
+            }
+        } else if (cloudFiles.isEmpty()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("No files in this cloud directory.", color = Color.Gray)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(cloudFiles) { file ->
+                    val isSelected = selectedFiles.contains(file.id)
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.toggleCloudFileSelection(file.id) },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSelected) SaffronSecondary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isSelected,
+                                onCheckedChange = { viewModel.toggleCloudFileSelection(file.id) },
+                                colors = CheckboxDefaults.colors(checkedColor = SaffronPrimary)
+                            )
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            Icon(
+                                imageVector = when (file.category) {
+                                    "Images" -> Icons.Default.Image
+                                    "Videos" -> Icons.Default.PlayArrow
+                                    "Audio" -> Icons.Default.MusicNote
+                                    else -> Icons.Default.InsertDriveFile
+                                },
+                                contentDescription = file.category,
+                                tint = SaffronPrimary,
+                                modifier = Modifier.size(28.dp)
+                            )
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = file.name,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray
+                                )
+                            }
+
+                            IconButton(onClick = { viewModel.deleteSingleCloudFile(file.id) }) {
+                                Icon(Icons.Default.Close, contentDescription = "Delete file", tint = Color.Gray)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Add Account Dialog
+    if (showAddAccountDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddAccountDialog = false },
+            title = { Text("Connect New Cloud Drive", color = SaffronPrimary) },
+            text = {
+                Column {
+                    Text("Enter the email address of the drive you wish to connect:", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = newAccountEmail,
+                        onValueChange = { newAccountEmail = it },
+                        label = { Text("Account Email") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = SaffronPrimary, focusedLabelColor = SaffronPrimary)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newAccountEmail.trim().isNotEmpty()) {
+                            viewModel.addCloudAccount(newAccountEmail.trim())
+                            newAccountEmail = ""
+                            showAddAccountDialog = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary)
+                ) {
+                    Text("Connect", color = Color.Black)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddAccountDialog = false }) {
+                    Text("Cancel", color = SaffronPrimary)
+                }
+            }
+        )
+    }
+}
+
+// --- 10. AI ASSISTANT & CONFIG SCREEN ---
+@Composable
+fun AIAssistantScreen(viewModel: MainViewModel) {
+    val chatMessages by viewModel.chatMessages.collectAsState()
+    val isHighThinkingEnabled by viewModel.isHighThinkingEnabled.collectAsState()
+    val apiKeyInput by viewModel.apiKeyInput.collectAsState()
+    val isSendingMessage by viewModel.isSendingMessage.collectAsState()
+
+    var chatTextInput by remember { mutableStateOf("") }
+    var isSetupPanelExpanded by remember { mutableStateOf(false) }
+    var localApiKeyInput by remember { mutableStateOf(apiKeyInput) }
+
+    // Sync local input with view model state when it changes
+    LaunchedEffect(apiKeyInput) {
+        localApiKeyInput = apiKeyInput
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Header
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "VVF AI Assistant",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = SaffronPrimary
+                )
+                Text(
+                    text = "Powered by Google Gemini Models",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
+
+            IconButton(onClick = { viewModel.clearAllChatHistory() }) {
+                Icon(Icons.Default.DeleteSweep, contentDescription = "Clear History", tint = Color.Red)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Collapsible Setup Panel
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { isSetupPanelExpanded = !isSetupPanelExpanded },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Settings, contentDescription = "Setup", tint = SaffronPrimary, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Gemini Setup Panel",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                    Icon(
+                        imageVector = if (isSetupPanelExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Expand/Collapse"
+                    )
+                }
+
+                if (isSetupPanelExpanded) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Divider()
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // API Key input
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Gemini API Key override (re-saves dynamically):",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.LightGray
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = localApiKeyInput,
+                                onValueChange = { localApiKeyInput = it },
+                                placeholder = { Text("AI Studio key...") },
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = SaffronPrimary),
+                                modifier = Modifier.weight(1f)
+                            )
+                            Button(
+                                onClick = { viewModel.applyApiKeyOverride(localApiKeyInput) },
+                                colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary)
+                            ) {
+                                Text("Apply", color = Color.Black)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // High thinking mode toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("High-thinking mode (Pro model)", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                            Text("Uses gemini-3.1-pro-preview with high thinking enabled for advanced reasoning.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = isHighThinkingEnabled,
+                            onCheckedChange = { viewModel.toggleHighThinking(it) },
+                            colors = SwitchDefaults.colors(checkedThumbColor = SaffronPrimary, checkedTrackColor = SaffronSecondary)
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Chat messages bubble list
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                .padding(8.dp)
+        ) {
+            if (chatMessages.isEmpty()) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Default.Chat, contentDescription = "Chat", tint = Color.Gray, modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Chat with VVF Smart File Assistant!", fontWeight = FontWeight.Bold)
+                    Text("Ask to explain files, security metrics, or operations.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(chatMessages) { msg ->
+                        val isUser = msg.role == "user"
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(
+                                        RoundedCornerShape(
+                                            topStart = 12.dp,
+                                            topEnd = 12.dp,
+                                            bottomStart = if (isUser) 12.dp else 0.dp,
+                                            bottomEnd = if (isUser) 0.dp else 12.dp
+                                        )
+                                    )
+                                    .background(
+                                        if (isUser) SaffronPrimary else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                    .padding(12.dp)
+                                    .widthIn(max = 280.dp)
+                            ) {
+                                Text(
+                                    text = msg.content,
+                                    color = if (isUser) Color.Black else Color.White,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Input row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = chatTextInput,
+                onValueChange = { chatTextInput = it },
+                placeholder = { Text("Ask anything...") },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = SaffronPrimary),
+                modifier = Modifier.weight(1f),
+                enabled = !isSendingMessage
+            )
+
+            IconButton(
+                onClick = {
+                    if (chatTextInput.trim().isNotEmpty()) {
+                        viewModel.sendMessageToAssistant(chatTextInput.trim())
+                        chatTextInput = ""
+                    }
+                },
+                enabled = !isSendingMessage && chatTextInput.trim().isNotEmpty(),
+                modifier = Modifier
+                    .background(
+                        if (chatTextInput.trim().isEmpty() || isSendingMessage) Color.Gray else SaffronPrimary,
+                        CircleShape
+                    )
+            ) {
+                if (isSendingMessage) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.Black, strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Default.Send, contentDescription = "Send", tint = Color.Black)
+                }
+            }
+        }
+    }
+}
+

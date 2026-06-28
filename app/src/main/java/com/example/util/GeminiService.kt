@@ -22,8 +22,14 @@ object GeminiService {
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    private val apiKey: String
-        get() = BuildConfig.GEMINI_API_KEY
+    private var overriddenKey: String? = null
+
+    fun setOverriddenKey(key: String) {
+        overriddenKey = if (key.trim().isNotEmpty()) key.trim() else null
+    }
+
+    val apiKey: String
+        get() = overriddenKey ?: BuildConfig.GEMINI_API_KEY
 
     /**
      * Checks if a valid API key is available.

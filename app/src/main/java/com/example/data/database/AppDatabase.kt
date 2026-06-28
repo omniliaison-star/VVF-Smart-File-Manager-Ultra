@@ -6,14 +6,26 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [DbFile::class, DbEmbedding::class, DbSearchHistory::class],
-    version = 1,
+    entities = [
+        DbFile::class,
+        DbEmbedding::class,
+        DbSearchHistory::class,
+        FileEntity::class,
+        CategoryEntity::class,
+        SecureStateEntity::class,
+        ChatMessageEntity::class
+    ],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun fileDao(): FileDao
     abstract fun embeddingDao(): EmbeddingDao
     abstract fun searchHistoryDao(): SearchHistoryDao
+    abstract fun fileEntityDao(): FileEntityDao
+    abstract fun categoryEntityDao(): CategoryEntityDao
+    abstract fun secureStateEntityDao(): SecureStateEntityDao
+    abstract fun chatMessageEntityDao(): ChatMessageEntityDao
 
     companion object {
         @Volatile

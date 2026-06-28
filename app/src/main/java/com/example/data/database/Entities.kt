@@ -35,3 +35,37 @@ data class DbFileFts(
     val name: String,
     val path: String
 )
+
+@Entity(tableName = "file_entities")
+data class FileEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val path: String,
+    val name: String,
+    val size: Long,
+    val mimeType: String,
+    val createdAt: Long,
+    val modifiedAt: Long
+)
+
+@Entity(tableName = "category_entities")
+data class CategoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val fileCount: Int,
+    val totalSize: Long
+)
+
+@Entity(tableName = "secure_state_entities")
+data class SecureStateEntity(
+    @PrimaryKey val key: String,
+    val value: String
+)
+
+@Entity(tableName = "chat_message_entities")
+data class ChatMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val role: String, // "user" or "model"
+    val content: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
