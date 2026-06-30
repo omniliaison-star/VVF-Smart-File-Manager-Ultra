@@ -46,6 +46,10 @@ import com.example.ui.theme.SaffronPrimary
 import com.example.ui.theme.SaffronSecondary
 import com.example.ui.theme.SaffronTertiary
 import com.example.util.GeminiService
+import android.annotation.SuppressLint
+import androidx.compose.ui.viewinterop.AndroidView
+import android.webkit.WebView
+import android.webkit.WebChromeClient
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -142,6 +146,235 @@ fun AppNavigationWrapper(viewModel: MainViewModel) {
     }
 }
 
+// --- D3 STORAGE CHART COMPOSABLE ---
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun D3StorageChart(categories: List<com.example.data.database.CategoryEntity>) {
+    val categoryDataJson = categories.joinToString(prefix = "[", postfix = "]") { category ->
+        val formattedSize = formatFileSize(category.totalSize)
+        """{"name": "${category.name}", "value": ${category.totalSize}, "formatted": "$formattedSize"}"""
+    }
+
+    val htmlContent = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+          <style>
+            body {
+              margin: 0;
+              padding: 16px;
+              background-color: transparent;
+              color: #FFFFFF;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+              display: flex;
+              flex-direction: column;
+              justify-content: center;
+              align-items: center;
+              min-height: 220px;
+              overflow: hidden;
+            }
+            #chart {
+              width: 100%;
+              height: 180px;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+            }
+            .tooltip {
+              position: absolute;
+              background: rgba(0, 0, 0, 0.85);
+              border: 1px solid #FFD54F;
+              padding: 6px 10px;
+              border-radius: 6px;
+              font-size: 11px;
+              pointer-events: none;
+              opacity: 0;
+              transition: opacity 0.2s;
+              color: #FFF;
+              z-index: 999;
+            }
+            .legend {
+              display: flex;
+              flex-wrap: wrap;
+              justify-content: center;
+              gap: 12px;
+              margin-top: 10px;
+              max-width: 100%;
+            }
+            .legend-item {
+              display: flex;
+              align-items: center;
+              font-size: 11px;
+              color: #E0E0E0;
+            }
+            .legend-color {
+              width: 10px;
+              height: 10px;
+              border-radius: 50%;
+              margin-right: 6px;
+            }
+          </style>
+        </head>
+        <body>
+          <div id="chart"></div>
+          <div class="legend" id="legend"></div>
+          <div class="tooltip" id="tooltip"></div>
+          <script>
+            const data = $categoryDataJson;
+            
+            function drawChart() {
+              const container = document.getElementById('chart');
+              container.innerHTML = '';
+              const legendContainer = document.getElementById('legend');
+              legendContainer.innerHTML = '';
+              
+              if (!data || data.length === 0 || data.reduce((acc, d) => acc + d.value, 0) === 0) {
+                container.innerHTML = '<div style="color: #888; font-size: 14px;">No data indexed yet</div>';
+                return;
+              }
+              
+              const filteredData = data.filter(d => d.value > 0);
+              if (filteredData.length === 0) {
+                container.innerHTML = '<div style="color: #888; font-size: 14px;">No files in categories</div>';
+                return;
+              }
+              
+              const width = container.clientWidth || 300;
+              const height = container.clientHeight || 180;
+              const radius = Math.min(width, height) / 2 - 8;
+              
+              const svg = d3.select("#chart")
+                .append("svg")
+                .attr("width", width)
+                .attr("height", height)
+                .append("g")
+                .attr("transform", "translate(" + (width / 2) + "," + (height / 2) + ")");
+                
+              const colors = ["#FFB300", "#FFD54F", "#FFE082", "#FF6F00", "#FF8F00", "#FFA000"];
+              const color = d3.scaleOrdinal()
+                .domain(filteredData.map(d => d.name))
+                .range(colors);
+                
+              const pie = d3.pie()
+                .value(d => d.value)
+                .sort(null);
+                
+              const arc = d3.arc()
+                .innerRadius(radius * 0.45)
+                .outerRadius(radius);
+                
+              const hoverArc = d3.arc()
+                .innerRadius(radius * 0.45)
+                .outerRadius(radius * 1.08);
+                
+              const arcs = svg.selectAll(".arc")
+                .data(pie(filteredData))
+                .enter()
+                .append("g")
+                .attr("class", "arc");
+                
+              const tooltip = d3.select("#tooltip");
+              
+              arcs.append("path")
+                .attr("d", arc)
+                .attr("fill", d => color(d.data.name))
+                .attr("stroke", "#1E1E1E")
+                .attr("stroke-width", "2px")
+                .style("cursor", "pointer")
+                .on("mouseover", function(event, d) {
+                  d3.select(this).transition().duration(200).attr("d", hoverArc);
+                  tooltip.transition().duration(200).style("opacity", 0.9);
+                  tooltip.html("<strong>" + d.data.name + "</strong><br/>" + d.data.formatted)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 15) + "px");
+                })
+                .on("mousemove", function(event) {
+                  tooltip.style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 15) + "px");
+                })
+                .on("mouseleave", function() {
+                  d3.select(this).transition().duration(200).attr("d", arc);
+                  tooltip.transition().duration(200).style("opacity", 0);
+                });
+                
+              svg.append("text")
+                .attr("text-anchor", "middle")
+                .attr("dy", "0.35em")
+                .attr("fill", "#FFB300")
+                .attr("font-size", "12px")
+                .attr("font-weight", "bold")
+                .text("D3.js Chart");
+
+              filteredData.forEach((d, i) => {
+                const item = document.createElement('div');
+                item.className = 'legend-item';
+                
+                const colorBox = document.createElement('div');
+                colorBox.className = 'legend-color';
+                colorBox.style.backgroundColor = color(d.name);
+                
+                const label = document.createElement('span');
+                label.innerText = d.name + ' (' + d.formatted + ')';
+                
+                item.appendChild(colorBox);
+                item.appendChild(label);
+                legendContainer.appendChild(item);
+              });
+            }
+            
+            window.addEventListener('resize', drawChart);
+            setTimeout(drawChart, 150);
+          </script>
+        </body>
+        </html>
+    """.trimIndent()
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("d3_storage_distribution_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Storage Distribution (Interactive D3.js)",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = SaffronPrimary
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Hover or tap on segments to view category size breakdown",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(260.dp),
+                factory = { context ->
+                    WebView(context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.loadWithOverviewMode = true
+                        settings.useWideViewPort = true
+                        setBackgroundColor(0) // Transparent
+                        webChromeClient = WebChromeClient()
+                        loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
+                    }
+                },
+                update = { webView ->
+                    webView.loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
+                }
+            )
+        }
+    }
+}
+
 // --- 1. DASHBOARD SCREEN ---
 @Composable
 fun DashboardScreen(viewModel: MainViewModel) {
@@ -149,6 +382,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
     val totalSpace by viewModel.storageTotalSpace.collectAsState()
     val usedSpace = totalSpace - freeSpace
     val usedRatio = if (totalSpace > 0) usedSpace.toFloat() / totalSpace.toFloat() else 0f
+    val categories by viewModel.allCategories.collectAsState()
 
     LazyColumn(
         modifier = Modifier
@@ -248,9 +482,13 @@ fun DashboardScreen(viewModel: MainViewModel) {
             }
         }
 
+        // Storage Distribution Chart
+        item {
+            D3StorageChart(categories)
+        }
+
         // Smart Categories Row / Grid
         item {
-            val categories by viewModel.allCategories.collectAsState()
             Text(
                 text = "Smart Categories",
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
@@ -1379,6 +1617,7 @@ fun DuplicatesScreen(viewModel: MainViewModel) {
     val isScanningSemantic by viewModel.scanningSemanticDuplicates.collectAsState()
     
     var selectedTab by remember { mutableStateOf(0) } // 0 = Exact, 1 = Semantic
+    var fileToDeleteByPath by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -1505,7 +1744,7 @@ fun DuplicatesScreen(viewModel: MainViewModel) {
                                                     color = Color.Gray
                                                 )
                                                 Spacer(modifier = Modifier.width(8.dp))
-                                                IconButton(onClick = { viewModel.deleteDuplicate(file.path) }) {
+                                                IconButton(onClick = { fileToDeleteByPath = file.path }) {
                                                     Icon(Icons.Default.Delete, contentDescription = "Delete Copy", tint = Color.Red)
                                                 }
                                             }
@@ -1621,7 +1860,7 @@ fun DuplicatesScreen(viewModel: MainViewModel) {
                                                     color = Color.Gray
                                                 )
                                                 Spacer(modifier = Modifier.width(8.dp))
-                                                IconButton(onClick = { viewModel.deleteDuplicate(file.path) }) {
+                                                IconButton(onClick = { fileToDeleteByPath = file.path }) {
                                                     Icon(Icons.Default.Delete, contentDescription = "Delete Copy", tint = Color.Red)
                                                 }
                                             }
@@ -1635,6 +1874,55 @@ fun DuplicatesScreen(viewModel: MainViewModel) {
             }
         }
     }
+
+    if (fileToDeleteByPath != null) {
+        AlertDialog(
+            onDismissRequest = { fileToDeleteByPath = null },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Confirm Deletion",
+                    tint = Color.Red,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Confirm Permanent Deletion",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to permanently delete this duplicate copy? This action is irreversible and the file will be securely wiped.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        fileToDeleteByPath?.let { path ->
+                            viewModel.deleteDuplicate(path)
+                        }
+                        fileToDeleteByPath = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
+                ) {
+                    Text("DELETE", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { fileToDeleteByPath = null },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.Gray)
+                ) {
+                    Text("CANCEL")
+                }
+            },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    }
 }
 
 // --- 5. JUNK CLEANER SCREEN ---
@@ -1642,6 +1930,7 @@ fun DuplicatesScreen(viewModel: MainViewModel) {
 fun JunkCleanerScreen(viewModel: MainViewModel) {
     val junkFiles by viewModel.junkFiles.collectAsState()
     val isScanning by viewModel.scanningJunk.collectAsState()
+    var showCleanJunkConfirmation by remember { mutableStateOf(false) }
 
     val totalLogs = junkFiles["logs"]?.sumOf { it.size } ?: 0L
     val totalTemp = junkFiles["temp"]?.sumOf { it.size } ?: 0L
@@ -1859,7 +2148,7 @@ fun JunkCleanerScreen(viewModel: MainViewModel) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Button(
-                    onClick = { viewModel.cleanJunk() },
+                    onClick = { showCleanJunkConfirmation = true },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp)
@@ -1872,9 +2161,55 @@ fun JunkCleanerScreen(viewModel: MainViewModel) {
             }
         }
     }
+
+    if (showCleanJunkConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showCleanJunkConfirmation = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Clear Cache",
+                    tint = SaffronPrimary,
+                    modifier = Modifier.size(28.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "Empty Storage Cache",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to clear system logs, temporary cache folders, and empty directories? This will safely free up ${formatFileSize(totalJunkSize)} of storage space.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.cleanJunk()
+                        showCleanJunkConfirmation = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = SaffronPrimary)
+                ) {
+                    Text("CLEAN NOW", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showCleanJunkConfirmation = false },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.Gray)
+                ) {
+                    Text("CANCEL")
+                }
+            },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    }
 }
 
-// --- 6. SECURE VAULT SCREEN ---
 @Composable
 fun VaultScreen(viewModel: MainViewModel) {
     val isAuthenticated by viewModel.isVaultAuthenticated.collectAsState()
