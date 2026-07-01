@@ -2729,7 +2729,7 @@ fun VaultScreen(viewModel: MainViewModel) {
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(
-                                text = "Sign in with Google",
+                                text = "Continue with Google",
                                 style = MaterialTheme.typography.bodyMedium.copy(
                                     fontWeight = FontWeight.Medium,
                                     color = Color(0xFF3C4043)
