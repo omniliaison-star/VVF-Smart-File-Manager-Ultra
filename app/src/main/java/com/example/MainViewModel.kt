@@ -1,5 +1,6 @@
 package com.example
 
+import android.net.Uri
 import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -150,6 +151,93 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleStorageBreakdown() {
         _isStorageBreakdownExpanded.value = !_isStorageBreakdownExpanded.value
+    }
+
+    private val _hasSdCard = MutableStateFlow(false)
+    val hasSdCard: StateFlow<Boolean> = _hasSdCard.asStateFlow()
+
+    private val _sdCardFiles = MutableStateFlow<List<FileItem>>(emptyList())
+    val sdCardFiles: StateFlow<List<FileItem>> = _sdCardFiles.asStateFlow()
+
+    private val _isSdCardActive = MutableStateFlow(false)
+    val isSdCardActive: StateFlow<Boolean> = _isSdCardActive.asStateFlow()
+
+    fun setSdCardActive(active: Boolean) {
+        _isSdCardActive.value = active
+        if (active) {
+            loadSdCardFiles()
+        }
+    }
+
+    var sdCardPickerTrigger: (() -> Unit)? = null
+
+    fun requestSdCardAccess() {
+        sdCardPickerTrigger?.invoke()
+    }
+
+    fun onSdCardGranted(uri: android.net.Uri) {
+        _hasSdCard.value = true
+        loadSdCardFiles()
+        triggerBackgroundScanning()
+    }
+
+    fun removeSdCardAccess() {
+        val prefs = getApplication<Application>().getSharedPreferences("vvf_api_prefs", android.content.Context.MODE_PRIVATE)
+        prefs.edit().remove("sd_card_uri").apply()
+        _hasSdCard.value = false
+        _sdCardFiles.value = emptyList()
+        triggerBackgroundScanning()
+    }
+
+    private val _currentSdCardFolderUri = MutableStateFlow<android.net.Uri?>(null)
+    val currentSdCardFolderUri: StateFlow<android.net.Uri?> = _currentSdCardFolderUri.asStateFlow()
+
+    fun loadSdCardFiles(folderUri: android.net.Uri? = null) {
+        viewModelScope.launch {
+            val targetUri = folderUri ?: fileRepository.getSdCardUri(getApplication())
+            if (targetUri != null) {
+                try {
+                    _currentSdCardFolderUri.value = targetUri
+                    val files = fileRepository.listSdCardFiles(getApplication(), targetUri)
+                    _sdCardFiles.value = files
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Error loading SD card files: ${e.message}", e)
+                }
+            }
+        }
+    }
+
+    fun navigateUpSdCard() {
+        val currentUri = _currentSdCardFolderUri.value ?: return
+        val rootUri = fileRepository.getSdCardUri(getApplication()) ?: return
+        if (currentUri.toString() == rootUri.toString()) {
+            return
+        }
+        try {
+            val doc = androidx.documentfile.provider.DocumentFile.fromTreeUri(getApplication(), currentUri)
+            val parentDoc = doc?.parentFile
+            if (parentDoc != null) {
+                loadSdCardFiles(parentDoc.uri)
+            } else {
+                loadSdCardFiles(rootUri)
+            }
+        } catch (e: Exception) {
+            loadSdCardFiles(rootUri)
+        }
+    }
+
+    fun isAtSdCardRoot(): Boolean {
+        val currentUri = _currentSdCardFolderUri.value ?: return true
+        val rootUri = fileRepository.getSdCardUri(getApplication()) ?: return true
+        return currentUri.toString() == rootUri.toString()
+    }
+
+    private val _vaultLastUsedAuth = MutableStateFlow("None")
+    val vaultLastUsedAuth: StateFlow<String> = _vaultLastUsedAuth.asStateFlow()
+
+    fun setLastUsedAuthMethod(method: String) {
+        vaultRepository.setLastUsedAuthMethod(method)
+        _vaultLastUsedAuth.value = method
     }
 
     private val _selectedCategoryFilter = MutableStateFlow<String?>(null)
@@ -424,6 +512,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val savedHighThinking = prefs.getBoolean("gemini_high_thinking", false)
         _isHighThinkingEnabled.value = savedHighThinking
 
+        // Initialize last used authentication method
+        _vaultLastUsedAuth.value = vaultRepository.getLastUsedAuthMethod()
+
+        // Initialize SD Card status
+        val sdCardUri = fileRepository.getSdCardUri(application)
+        _hasSdCard.value = sdCardUri != null
+        if (sdCardUri != null) {
+            loadSdCardFiles()
+        }
+
         navigateTo(Screen.Dashboard)
         loadSearchHistory()
         refreshStorageInfo()
@@ -431,12 +529,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadChatMessages()
         loadCachedDuplicates()
         _selectedCloudAccount.value?.let { generateSimulatedCloudFiles(it) }
+
+        // Periodic background update mechanism for Storage Dashboard (every 30 seconds)
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(30000)
+                if (_currentScreen.value is Screen.Dashboard) {
+                    refreshStorageInfo()
+                    triggerBackgroundScanning()
+                }
+            }
+        }
     }
 
     fun navigateTo(screen: Screen) {
         _currentScreen.value = screen
         _selectedFiles.value = emptySet()
         when (screen) {
+            is Screen.Dashboard -> triggerBackgroundScanning()
             is Screen.Explorer -> loadExplorerFiles(_currentPath.value)
             is Screen.MediaCenter -> loadMediaCenter()
             is Screen.Vault -> loadVault()
@@ -725,6 +835,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val success = vaultRepository.setPin(pin)
         if (success) {
             _isVaultAuthenticated.value = true
+            setLastUsedAuthMethod("PIN")
             loadVault()
         }
         return success
@@ -735,11 +846,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isVaultAuthenticated.value = success
         if (success) {
             _vaultError.value = null
+            setLastUsedAuthMethod("PIN")
             loadVault()
         } else {
             _vaultError.value = "Incorrect PIN. Please try again."
         }
         return success
+    }
+
+    fun authenticateWithBiometrics() {
+        _isVaultAuthenticated.value = true
+        _vaultError.value = null
+        setLastUsedAuthMethod("Biometric")
+        loadVault()
     }
 
     fun authenticateWithGoogle(context: android.content.Context, onResult: (GoogleSignInResult) -> Unit) {
@@ -753,11 +872,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     vaultRepository.saveGoogleEmailHash(emailHash)
                     _isVaultAuthenticated.value = true
                     _vaultError.value = null
+                    setLastUsedAuthMethod("Google")
                     loadVault()
                 } else {
                     if (storedHash == emailHash) {
                         _isVaultAuthenticated.value = true
                         _vaultError.value = null
+                        setLastUsedAuthMethod("Google")
                         loadVault()
                     } else {
                         _vaultError.value = "This Google account is not authorized to unlock this Vault."

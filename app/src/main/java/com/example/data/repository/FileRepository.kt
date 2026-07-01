@@ -427,8 +427,32 @@ class FileRepository(
             }
             traverse(sandboxRoot)
             
-            val total = allFiles.size
-            Log.d(TAG, "Found $total files to index.")
+            // Collect SD card files if available
+            val sdCardUri = getSdCardUri(context)
+            val sdCardFiles = mutableListOf<androidx.documentfile.provider.DocumentFile>()
+            if (sdCardUri != null) {
+                try {
+                    val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, sdCardUri)
+                    if (rootDoc != null) {
+                        fun traverseDoc(doc: androidx.documentfile.provider.DocumentFile) {
+                            if (doc.isDirectory) {
+                                val list = doc.listFiles()
+                                for (child in list) {
+                                    traverseDoc(child)
+                                }
+                            } else {
+                                sdCardFiles.add(doc)
+                            }
+                        }
+                        traverseDoc(rootDoc)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to traverse SD card documents: ${e.message}")
+                }
+            }
+            
+            val total = allFiles.size + sdCardFiles.size
+            Log.d(TAG, "Found $total files to index (Sandbox: ${allFiles.size}, SD Card: ${sdCardFiles.size}).")
             
             // Clear current records in db to refresh index
             fileDao.clearAllFiles()
@@ -439,8 +463,11 @@ class FileRepository(
 
             val db = AppDatabase.getDatabase(context)
             val batchSize = 50
+            var processedCount = 0
+
+            // 1. Index sandbox files
             for (i in allFiles.indices step batchSize) {
-                val end = minOf(i + batchSize, total)
+                val end = minOf(i + batchSize, allFiles.size)
                 val batchFiles = allFiles.subList(i, end)
                 
                 db.withTransaction {
@@ -476,7 +503,54 @@ class FileRepository(
                     }
                 }
                 
-                onProgress(end, total)
+                processedCount += batchFiles.size
+                onProgress(processedCount, total)
+                kotlinx.coroutines.yield()
+                System.gc()
+            }
+
+            // 2. Index SD Card files
+            for (i in sdCardFiles.indices step batchSize) {
+                val end = minOf(i + batchSize, sdCardFiles.size)
+                val batchDocs = sdCardFiles.subList(i, end)
+                
+                db.withTransaction {
+                    for (doc in batchDocs) {
+                        val dbFile = DbFile(
+                            path = doc.uri.toString(),
+                            name = doc.name ?: "",
+                            size = doc.length(),
+                            mimeType = doc.type ?: "",
+                            createdAt = doc.lastModified(),
+                            modifiedAt = doc.lastModified()
+                        )
+                        val id = fileDao.insertFile(dbFile)
+
+                        // Classify
+                        val category = classifyFile(dbFile)
+                        counts[category] = (counts[category] ?: 0) + 1
+                        sizes[category] = (sizes[category] ?: 0L) + dbFile.size
+
+                        // If Gemini API Key is available, fetch embedding for SD Card documents
+                        if (GeminiService.isApiKeyAvailable() && (dbFile.mimeType.contains("text") || dbFile.mimeType.contains("pdf") || dbFile.name.endsWith(".txt") || dbFile.name.endsWith(".csv"))) {
+                            try {
+                                val textContent = extractTextContent(doc)
+                                if (textContent.isNotEmpty()) {
+                                    val vector = GeminiService.getEmbedding(textContent.take(1000))
+                                    if (vector != null) {
+                                        val vectorString = vector.joinToString(",")
+                                        embeddingDao.insertEmbedding(DbEmbedding(fileId = id, vectorData = vectorString))
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed embedding SD card file ${doc.name}: ${e.message}")
+                            }
+                        }
+                    }
+                }
+                
+                processedCount += batchDocs.size
+                onProgress(processedCount, total)
                 kotlinx.coroutines.yield()
                 System.gc()
             }
@@ -1114,6 +1188,131 @@ class FileRepository(
             }
         } catch (e: Exception) {
             Log.e("FileRepository", "Error extracting text content: ${e.message}", e)
+            ""
+        }
+    }
+
+    fun getSdCardUri(context: Context): Uri? {
+        val prefs = context.getSharedPreferences("vvf_api_prefs", Context.MODE_PRIVATE)
+        val uriStr = prefs.getString("sd_card_uri", null)
+        return if (uriStr != null) Uri.parse(uriStr) else null
+    }
+
+    suspend fun listSdCardFiles(context: Context, folderUri: Uri): List<FileItem> = withContext(Dispatchers.IO) {
+        val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, folderUri) ?: return@withContext emptyList()
+        val files = rootDoc.listFiles()
+        return@withContext files.map { doc ->
+            FileItem(
+                id = doc.uri.toString(),
+                name = doc.name ?: "",
+                path = doc.uri.toString(),
+                size = if (doc.isDirectory) 0L else doc.length(),
+                isDirectory = doc.isDirectory,
+                mimeType = doc.type ?: (if (doc.isDirectory) "directory" else ""),
+                lastModified = doc.lastModified()
+            )
+        }.sortedWith(compareBy({ !it.isDirectory }, { it.name?.lowercase() ?: "" }))
+    }
+
+    suspend fun extractTextContent(doc: androidx.documentfile.provider.DocumentFile): String = withContext(Dispatchers.IO) {
+        try {
+            val uri = doc.uri
+            val mimeType = doc.type ?: ""
+            val name = doc.name ?: ""
+            
+            val isTxtOrCsv = mimeType == "text/plain" || mimeType == "text/csv" || name.endsWith(".txt", ignoreCase = true) || name.endsWith(".csv", ignoreCase = true)
+            val isPdf = mimeType == "application/pdf" || name.endsWith(".pdf", ignoreCase = true)
+            val isDocx = mimeType.contains("wordprocessingml") || name.endsWith(".docx", ignoreCase = true)
+
+            if (!isTxtOrCsv && !isPdf && !isDocx) return@withContext ""
+
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                when {
+                    isTxtOrCsv -> {
+                        val content = inputStream.bufferedReader(Charsets.UTF_8).readText()
+                        if (content.length > 50000) {
+                            content.substring(0, 50000)
+                        } else {
+                            content
+                        }
+                    }
+                    isPdf -> {
+                        val builder = StringBuilder()
+                        try {
+                            val bytes = inputStream.readBytes()
+                            var i = 0
+                            while (i < bytes.size && builder.length < 50000) {
+                                if (bytes[i] == '('.code.toByte()) {
+                                    i++
+                                    val temp = StringBuilder()
+                                    var escaped = false
+                                    while (i < bytes.size) {
+                                        val b = bytes[i]
+                                        if (escaped) {
+                                            temp.append(b.toInt().toChar())
+                                            escaped = false
+                                        } else if (b == '\\'.code.toByte()) {
+                                            escaped = true
+                                        } else if (b == ')'.code.toByte()) {
+                                            break
+                                        } else {
+                                            temp.append(b.toInt().toChar())
+                                        }
+                                        i++
+                                    }
+                                    val str = temp.toString().trim()
+                                    if (str.length > 1 && str.any { it.isLetterOrDigit() }) {
+                                        builder.append(str).append(" ")
+                                    }
+                                }
+                                i++
+                            }
+                        } catch (e: Exception) {
+                            Log.e("FileRepository", "Raw PDF parsing failed: ${e.message}")
+                        }
+
+                        val fullPdfText = builder.toString().trim()
+                        if (fullPdfText.length < 100) {
+                            "PDF text extraction is not supported without a third-party library. Only the file name and metadata can be summarized."
+                        } else if (fullPdfText.length > 50000) {
+                            fullPdfText.substring(0, 50000)
+                        } else {
+                            fullPdfText
+                        }
+                    }
+                    isDocx -> {
+                        val builder = StringBuilder()
+                        java.util.zip.ZipInputStream(inputStream).use { zip ->
+                            var entry = zip.nextEntry
+                            while (entry != null) {
+                                if (entry.name == "word/document.xml") {
+                                    val buffer = ByteArray(4096)
+                                    val out = java.io.ByteArrayOutputStream()
+                                    var len = zip.read(buffer)
+                                    while (len > 0) {
+                                        out.write(buffer, 0, len)
+                                        len = zip.read(buffer)
+                                    }
+                                    val rawXml = out.toString("UTF-8")
+                                    val cleanText = rawXml.replace(Regex("<[^>]+>"), " ")
+                                    builder.append(cleanText)
+                                    break
+                                }
+                                entry = zip.nextEntry
+                            }
+                        }
+                        val result = builder.toString().trim()
+                        if (result.length > 50000) {
+                            result.substring(0, 50000)
+                        } else {
+                            result
+                        }
+                    }
+                    else -> ""
+                }
+            } ?: ""
+        } catch (e: Exception) {
+            Log.e("FileRepository", "Failed to extract text from DocumentFile: ${e.message}")
             ""
         }
     }

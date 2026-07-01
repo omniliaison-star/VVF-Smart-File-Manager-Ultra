@@ -95,6 +95,14 @@ class VaultRepository(
         return sharedPrefs.edit().putString("vault_google_email_hash", hash).commit()
     }
 
+    fun getLastUsedAuthMethod(): String {
+        return sharedPrefs.getString("vault_last_used_auth", "None") ?: "None"
+    }
+
+    fun setLastUsedAuthMethod(method: String) {
+        sharedPrefs.edit().putString("vault_last_used_auth", method).apply()
+    }
+
     fun hashEmail(email: String): String {
         return try {
             val digest = java.security.MessageDigest.getInstance("SHA-256")

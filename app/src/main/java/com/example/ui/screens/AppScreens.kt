@@ -986,6 +986,10 @@ fun ExplorerScreen(viewModel: MainViewModel) {
     val clipboard by viewModel.clipboard.collectAsState()
     val selectedCategoryFilter by viewModel.selectedCategoryFilter.collectAsState()
 
+    val isSdCardActive by viewModel.isSdCardActive.collectAsState()
+    val sdCardFiles by viewModel.sdCardFiles.collectAsState()
+    val hasSdCard by viewModel.hasSdCard.collectAsState()
+
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
 
@@ -996,35 +1000,83 @@ fun ExplorerScreen(viewModel: MainViewModel) {
     var previewFileItem by remember { mutableStateOf<FileItem?>(null) }
     var showSummarizationDialogForFile by remember { mutableStateOf<FileItem?>(null) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Toolbar with path address
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = { 
-                    if (selectedCategoryFilter != null) {
-                        viewModel.setCategoryFilter(null)
-                    } else {
-                        viewModel.navigateUp() 
-                    }
-                },
-                enabled = selectedCategoryFilter != null || !viewModel.isAtSandboxRoot()
-            ) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-            }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val coroutineScope = rememberCoroutineScope()
 
-            Text(
-                text = selectedCategoryFilter?.let { "Category: $it" } ?: (if (currentPath.isEmpty()) "VVF_Smart_Explorer" else File(currentPath).name),
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = MaterialTheme.colorScheme.background,
+                modifier = Modifier.width(280.dp)
+            ) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Storage Locations",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                
+                NavigationDrawerItem(
+                    label = { Text("Internal Storage", fontWeight = FontWeight.SemiBold) },
+                    selected = !isSdCardActive,
+                    onClick = {
+                        viewModel.setSdCardActive(false)
+                        coroutineScope.launch { drawerState.close() }
+                    },
+                    icon = { Icon(Icons.Default.Storage, contentDescription = null, tint = SaffronPrimary) },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+
+                NavigationDrawerItem(
+                    label = { Text("SD Card", fontWeight = FontWeight.SemiBold) },
+                    selected = isSdCardActive,
+                    onClick = {
+                        viewModel.setSdCardActive(true)
+                        coroutineScope.launch { drawerState.close() }
+                    },
+                    icon = { Icon(Icons.Default.SdCard, contentDescription = null, tint = SaffronPrimary) },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+            }
+        }
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Toolbar with path address
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { coroutineScope.launch { drawerState.open() } }) {
+                    Icon(Icons.Default.Menu, contentDescription = "Open Storage Menu")
+                }
+
+                IconButton(
+                    onClick = { 
+                        if (isSdCardActive) {
+                            viewModel.navigateUpSdCard()
+                        } else if (selectedCategoryFilter != null) {
+                            viewModel.setCategoryFilter(null)
+                        } else {
+                            viewModel.navigateUp() 
+                        }
+                    },
+                    enabled = if (isSdCardActive) !viewModel.isAtSdCardRoot() else (selectedCategoryFilter != null || !viewModel.isAtSandboxRoot())
+                ) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                }
+
+                Text(
+                    text = if (isSdCardActive) "SD Card Storage" else (selectedCategoryFilter?.let { "Category: $it" } ?: (if (currentPath.isEmpty()) "VVF_Smart_Explorer" else File(currentPath).name)),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
 
             if (selectedCategoryFilter != null) {
                 IconButton(onClick = { viewModel.setCategoryFilter(null) }) {
@@ -1201,147 +1253,152 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                     tint = SaffronPrimary
                 )
             }
-        }
-
-        // Files & Folders List
-        if (pagedFiles.itemCount == 0) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.Folder, contentDescription = "Empty", tint = Color.Gray, modifier = Modifier.size(64.dp))
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("This folder is empty.", color = Color.Gray)
-                }
-            }
-        } else {
-            if (viewMode == com.example.ViewMode.LIST) {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(bottom = 80.dp)
+        }        // Files & Folders List
+        if (isSdCardActive) {
+            if (sdCardFiles.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
                 ) {
-                    items(pagedFiles.itemCount) { index ->
-                        val file = pagedFiles[index] ?: return@items
-                        val isSelected = selected.contains(file.path)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .combinedClickable(
-                                    onClick = {
-                                        if (selected.isNotEmpty()) {
-                                            viewModel.toggleFileSelection(file.path)
-                                        } else if (file.isDirectory) {
-                                            viewModel.loadExplorerFiles(file.path)
-                                        }
-                                    },
-                                    onLongClick = {
-                                        previewFileItem = file
-                                    }
-                                )
-                                .background(if (isSelected) SaffronPrimary.copy(alpha = 0.15f) else Color.Transparent)
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
-                                contentDescription = if (file.isDirectory) "Folder" else "File",
-                                tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
-                                modifier = Modifier.size(40.dp)
-                            )
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = file.name,
-                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = if (file.isDirectory) "Folder" else "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                )
-                            }
-     
-                            // More options trigger
-                            IconButton(onClick = { activeFileItemForMenu = file }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "File Options")
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Folder, contentDescription = "Empty", tint = Color.Gray, modifier = Modifier.size(64.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("This SD Card folder is empty or not granted.", color = Color.Gray)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (!hasSdCard) {
+                            Button(
+                                onClick = { viewModel.requestSdCardAccess() },
+                                colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary)
+                            ) {
+                                Text("Grant SD Card Access")
                             }
                         }
                     }
                 }
             } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(110.dp),
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(bottom = 80.dp, start = 8.dp, end = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(pagedFiles.itemCount) { index ->
-                        val file = pagedFiles[index] ?: return@items
-                        val isSelected = selected.contains(file.path)
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(0.95f)
-                                .combinedClickable(
-                                    onClick = {
-                                        if (selected.isNotEmpty()) {
-                                            viewModel.toggleFileSelection(file.path)
-                                        } else if (file.isDirectory) {
-                                            viewModel.loadExplorerFiles(file.path)
+                if (viewMode == com.example.ViewMode.LIST) {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(bottom = 80.dp)
+                    ) {
+                        items(sdCardFiles) { file ->
+                            val isSelected = selected.contains(file.path)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (selected.isNotEmpty()) {
+                                                viewModel.toggleFileSelection(file.path)
+                                            } else if (file.isDirectory) {
+                                                viewModel.loadSdCardFiles(android.net.Uri.parse(file.path))
+                                            }
+                                        },
+                                        onLongClick = {
+                                            previewFileItem = file
                                         }
-                                    },
-                                    onLongClick = {
-                                        previewFileItem = file
-                                    }
-                                ),
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (isSelected) SaffronPrimary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                            ),
-                            border = if (isSelected) androidx.compose.foundation.BorderStroke(2.dp, SaffronPrimary) else null
-                        ) {
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(8.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
-                                ) {
-                                    Icon(
-                                        imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
-                                        contentDescription = if (file.isDirectory) "Folder" else "File",
-                                        tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
-                                        modifier = Modifier.size(48.dp)
                                     )
-                                    Spacer(modifier = Modifier.height(8.dp))
+                                    .background(if (isSelected) SaffronPrimary.copy(alpha = 0.15f) else Color.Transparent)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
+                                    contentDescription = if (file.isDirectory) "Folder" else "File",
+                                    tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                    modifier = Modifier.size(40.dp)
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = file.name,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
                                         maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        textAlign = TextAlign.Center
+                                        overflow = TextOverflow.Ellipsis
                                     )
-                                    if (!file.isDirectory) {
-                                        Text(
-                                            text = formatFileSize(file.size),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                        )
-                                    }
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = if (file.isDirectory) "Folder" else "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                    )
                                 }
-                                Box(modifier = Modifier.align(Alignment.TopEnd)) {
-                                    IconButton(
-                                        onClick = { activeFileItemForMenu = file },
-                                        modifier = Modifier.size(36.dp)
+                                IconButton(onClick = { activeFileItemForMenu = file }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "File Options")
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(110.dp),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(bottom = 80.dp, start = 8.dp, end = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(sdCardFiles) { file ->
+                            val isSelected = selected.contains(file.path)
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(0.95f)
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (selected.isNotEmpty()) {
+                                                viewModel.toggleFileSelection(file.path)
+                                            } else if (file.isDirectory) {
+                                                viewModel.loadSdCardFiles(android.net.Uri.parse(file.path))
+                                            }
+                                        },
+                                        onLongClick = {
+                                            previewFileItem = file
+                                        }
+                                    ),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected) SaffronPrimary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                border = if (isSelected) androidx.compose.foundation.BorderStroke(2.dp, SaffronPrimary) else null
+                            ) {
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
                                     ) {
-                                        Icon(Icons.Default.MoreVert, contentDescription = "File Options", modifier = Modifier.size(16.dp))
+                                        Icon(
+                                            imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
+                                            contentDescription = if (file.isDirectory) "Folder" else "File",
+                                            tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                            modifier = Modifier.size(48.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = file.name,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        if (!file.isDirectory) {
+                                            Text(
+                                                text = formatFileSize(file.size),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                            )
+                                        }
+                                    }
+                                    Box(modifier = Modifier.align(Alignment.TopEnd)) {
+                                        IconButton(
+                                            onClick = { activeFileItemForMenu = file },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Default.MoreVert, contentDescription = "File Options", modifier = Modifier.size(16.dp))
+                                        }
                                     }
                                 }
                             }
@@ -1349,7 +1406,156 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                     }
                 }
             }
-        } }
+        } else {
+            if (pagedFiles.itemCount == 0) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Folder, contentDescription = "Empty", tint = Color.Gray, modifier = Modifier.size(64.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("This folder is empty.", color = Color.Gray)
+                    }
+                }
+            } else {
+                if (viewMode == com.example.ViewMode.LIST) {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(bottom = 80.dp)
+                    ) {
+                        items(pagedFiles.itemCount) { index ->
+                            val file = pagedFiles[index] ?: return@items
+                            val isSelected = selected.contains(file.path)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (selected.isNotEmpty()) {
+                                                viewModel.toggleFileSelection(file.path)
+                                            } else if (file.isDirectory) {
+                                                viewModel.loadExplorerFiles(file.path)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            previewFileItem = file
+                                        }
+                                    )
+                                    .background(if (isSelected) SaffronPrimary.copy(alpha = 0.15f) else Color.Transparent)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
+                                    contentDescription = if (file.isDirectory) "Folder" else "File",
+                                    tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                    modifier = Modifier.size(40.dp)
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = file.name,
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = if (file.isDirectory) "Folder" else "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                    )
+                                }
+         
+                                // More options trigger
+                                IconButton(onClick = { activeFileItemForMenu = file }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "File Options")
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(110.dp),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(bottom = 80.dp, start = 8.dp, end = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(pagedFiles.itemCount) { index ->
+                            val file = pagedFiles[index] ?: return@items
+                            val isSelected = selected.contains(file.path)
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(0.95f)
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (selected.isNotEmpty()) {
+                                                viewModel.toggleFileSelection(file.path)
+                                            } else if (file.isDirectory) {
+                                                viewModel.loadExplorerFiles(file.path)
+                                            }
+                                        },
+                                        onLongClick = {
+                                            previewFileItem = file
+                                        }
+                                    ),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected) SaffronPrimary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                border = if (isSelected) androidx.compose.foundation.BorderStroke(2.dp, SaffronPrimary) else null
+                            ) {
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
+                                            contentDescription = if (file.isDirectory) "Folder" else "File",
+                                            tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                            modifier = Modifier.size(48.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = file.name,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        if (!file.isDirectory) {
+                                            Text(
+                                                text = formatFileSize(file.size),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                            )
+                                        }
+                                    }
+                                    Box(modifier = Modifier.align(Alignment.TopEnd)) {
+                                        IconButton(
+                                            onClick = { activeFileItemForMenu = file },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Default.MoreVert, contentDescription = "File Options", modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
     // CREATE FOLDER DIALOG
     if (showCreateFolderDialog) {
@@ -2576,6 +2782,39 @@ fun VaultScreen(viewModel: MainViewModel) {
                 color = Color.Gray
             )
 
+            val lastUsedAuth by viewModel.vaultLastUsedAuth.collectAsState()
+            if (lastUsedAuth != "None") {
+                Spacer(modifier = Modifier.height(12.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = SaffronPrimary.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, SaffronPrimary.copy(alpha = 0.35f)),
+                    modifier = Modifier.align(Alignment.Start)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = when (lastUsedAuth) {
+                                "PIN" -> Icons.Default.Lock
+                                "Biometric" -> Icons.Default.Fingerprint
+                                else -> Icons.Default.Star
+                            },
+                            contentDescription = null,
+                            tint = SaffronPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Last used authentication: $lastUsedAuth",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = SaffronPrimary
+                        )
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
 
             if (!isAuthenticated) {
@@ -2625,8 +2864,43 @@ fun VaultScreen(viewModel: MainViewModel) {
                         // Biometric / Fingerprint Option
                         IconButton(
                             onClick = {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Biometric credentials are not configured or available. Please use PIN or Google Sign-In.")
+                                if (isPinSet) {
+                                    try {
+                                        val executor = context.mainExecutor
+                                        val biometricPrompt = android.hardware.biometrics.BiometricPrompt.Builder(context)
+                                            .setTitle("Unlock Secure Vault")
+                                            .setSubtitle("Use your biometric credential")
+                                            .setNegativeButton("Use PIN", executor) { _, _ -> }
+                                            .build()
+
+                                        biometricPrompt.authenticate(
+                                            android.os.CancellationSignal(),
+                                            executor,
+                                            object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                                                override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult?) {
+                                                    viewModel.authenticateWithBiometrics()
+                                                }
+                                                override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("Biometric authentication error: $errString")
+                                                    }
+                                                }
+                                                override fun onAuthenticationFailed() {
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar("Biometric authentication failed")
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    } catch (e: Exception) {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("Biometric not available or not configured on this device.")
+                                        }
+                                    }
+                                } else {
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar("Please set a PIN first before using Biometric Unlock.")
+                                    }
                                 }
                             },
                             modifier = Modifier
@@ -3206,6 +3480,47 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = SaffronPrimary)
                 ) {
                     Text("Clear AI Search History")
+                }
+            }
+        }
+
+        // SD Card Access Controls
+        val hasSdCard by viewModel.hasSdCard.collectAsState()
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("SD Card Storage Connection", fontWeight = FontWeight.Bold)
+                if (hasSdCard) {
+                    Text(
+                        text = "SD Card storage has been connected and granted access using Android Storage Access Framework (SAF). Ready to browse and index.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Button(
+                        onClick = { viewModel.removeSdCardAccess() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Remove SD Card Access")
+                    }
+                } else {
+                    Text(
+                        text = "No SD Card storage connected. You can set up connection to your external SD Card storage from the Explorer screen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Button(
+                        onClick = { 
+                            viewModel.navigateTo(Screen.Explorer)
+                            viewModel.setSdCardActive(true)
+                            viewModel.requestSdCardAccess()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Connect SD Card Storage")
+                    }
                 }
             }
         }
