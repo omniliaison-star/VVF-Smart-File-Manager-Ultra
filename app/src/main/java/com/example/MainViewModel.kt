@@ -10,6 +10,7 @@ import com.example.data.database.CategoryEntity
 import com.example.data.model.FileItem
 import com.example.data.repository.FileRepository
 import com.example.data.repository.VaultRepository
+import com.example.data.repository.GoogleSignInResult
 import com.example.util.GeminiService
 import com.example.util.ZipHelper
 import java.io.File
@@ -22,6 +23,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import com.example.data.database.DbFile
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
@@ -124,6 +127,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    val top5LargestFiles: StateFlow<List<DbFile>> = database.fileDao().getAllFiles()
+        .map { files ->
+            files.sortedByDescending { it.size }.take(5)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    private val _isStorageBreakdownExpanded = MutableStateFlow(false)
+    val isStorageBreakdownExpanded: StateFlow<Boolean> = _isStorageBreakdownExpanded.asStateFlow()
+
+    fun toggleStorageBreakdown() {
+        _isStorageBreakdownExpanded.value = !_isStorageBreakdownExpanded.value
+    }
 
     private val _selectedCategoryFilter = MutableStateFlow<String?>(null)
     val selectedCategoryFilter: StateFlow<String?> = _selectedCategoryFilter.asStateFlow()
@@ -287,6 +307,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isIndexing = MutableStateFlow(false)
     val isIndexing: StateFlow<Boolean> = _isIndexing.asStateFlow()
 
+    private val _isFirstLaunch = MutableStateFlow(true)
+    val isFirstLaunch: StateFlow<Boolean> = _isFirstLaunch.asStateFlow()
+
     private val _indexingProgress = MutableStateFlow(0)
     val indexingProgress: StateFlow<Int> = _indexingProgress.asStateFlow()
 
@@ -368,6 +391,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun loadRecommendations() {
+        refreshRecommendations()
+    }
+
     private val _isHighThinkingEnabled = MutableStateFlow(false)
     val isHighThinkingEnabled: StateFlow<Boolean> = _isHighThinkingEnabled.asStateFlow()
 
@@ -394,7 +421,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadChatMessages()
         loadCachedDuplicates()
         _selectedCloudAccount.value?.let { generateSimulatedCloudFiles(it) }
-        refreshRecommendations()
     }
 
     fun navigateTo(screen: Screen) {
@@ -706,6 +732,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return success
     }
 
+    fun authenticateWithGoogle(context: android.content.Context, onResult: (GoogleSignInResult) -> Unit) {
+        viewModelScope.launch {
+            val result = vaultRepository.signInWithGoogle(context)
+            if (result is GoogleSignInResult.Success) {
+                val emailHash = vaultRepository.hashEmail(result.email)
+                val storedHash = vaultRepository.getGoogleEmailHash()
+                if (storedHash == null) {
+                    // Register on first sign-in
+                    vaultRepository.saveGoogleEmailHash(emailHash)
+                    _isVaultAuthenticated.value = true
+                    _vaultError.value = null
+                    loadVault()
+                } else {
+                    if (storedHash == emailHash) {
+                        _isVaultAuthenticated.value = true
+                        _vaultError.value = null
+                        loadVault()
+                    } else {
+                        _vaultError.value = "This Google account is not authorized to unlock this Vault."
+                    }
+                }
+            }
+            onResult(result)
+        }
+    }
+
     fun lockVault() {
         _isVaultAuthenticated.value = false
     }
@@ -816,8 +868,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             fileRepository.indexAllFiles { progress, total ->
                 _indexingProgress.value = progress
                 _indexingTotal.value = total
+            }.also {
+                loadRecommendations()
             }
             _isIndexing.value = false
+            _isFirstLaunch.value = false
         }
     }
 

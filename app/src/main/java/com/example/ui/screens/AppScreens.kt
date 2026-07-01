@@ -45,9 +45,19 @@ import com.example.data.model.FileItem
 import com.example.ui.theme.SaffronPrimary
 import com.example.ui.theme.SaffronSecondary
 import com.example.ui.theme.SaffronTertiary
+import androidx.compose.foundation.BorderStroke
+import com.example.data.repository.GoogleSignInResult
 import com.example.util.GeminiService
 import android.annotation.SuppressLint
 import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.size.Precision
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.asImageBitmap
+import android.graphics.Bitmap
 import android.webkit.WebView
 import android.webkit.WebChromeClient
 import java.io.File
@@ -357,6 +367,16 @@ fun D3StorageChart(categories: List<com.example.data.database.CategoryEntity>) {
                     .fillMaxWidth()
                     .height(260.dp),
                 factory = { context ->
+                    try {
+                        val cacheDir = context.cacheDir
+                        val wasmDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm")
+                        val jsDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/js")
+                        if (!wasmDir.exists()) wasmDir.mkdirs()
+                        if (!jsDir.exists()) jsDir.mkdirs()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
                     WebView(context).apply {
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
@@ -375,6 +395,176 @@ fun D3StorageChart(categories: List<com.example.data.database.CategoryEntity>) {
     }
 }
 
+@Composable
+fun FirstScanLoadingScreen(progress: Int, total: Int) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Hero banner skeleton / placeholder
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(130.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
+                CircularProgressIndicator(
+                    color = SaffronPrimary,
+                    modifier = Modifier.size(32.dp),
+                    strokeWidth = 3.dp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Scanning...",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = SaffronPrimary
+                )
+                if (total > 0) {
+                    Text(
+                        text = "Indexing $progress of $total files...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                } else {
+                    Text(
+                        text = "Scanning storage...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+            }
+        }
+
+        // Mock Storage Overview Card Skeleton
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(Color.Gray.copy(alpha = 0.2f))
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .width(140.dp)
+                            .height(18.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.Gray.copy(alpha = 0.2f))
+                    )
+                    Box(
+                        modifier = Modifier
+                            .width(180.dp)
+                            .height(14.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.Gray.copy(alpha = 0.15f))
+                    )
+                }
+            }
+        }
+
+        Text(
+            text = "Analyzing Smart Categories...",
+            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+
+        // Mock Smart Categories Row Skeleton
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            repeat(3) {
+                Card(
+                    modifier = Modifier.width(110.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.Gray.copy(alpha = 0.2f))
+                        )
+                        Box(
+                            modifier = Modifier
+                                .width(80.dp)
+                                .height(14.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.Gray.copy(alpha = 0.2f))
+                        )
+                    }
+                }
+            }
+        }
+
+        Text(
+            text = "Loading Utilities...",
+            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+
+        // Mock Quick Utilities Grid Skeleton
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                repeat(2) {
+                    Card(
+                        modifier = Modifier.weight(1f).height(60.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Gray.copy(alpha = 0.15f))
+                            )
+                        }
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                repeat(2) {
+                    Card(
+                        modifier = Modifier.weight(1f).height(60.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Gray.copy(alpha = 0.15f))
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // --- 1. DASHBOARD SCREEN ---
 @Composable
 fun DashboardScreen(viewModel: MainViewModel) {
@@ -383,13 +573,20 @@ fun DashboardScreen(viewModel: MainViewModel) {
     val usedSpace = totalSpace - freeSpace
     val usedRatio = if (totalSpace > 0) usedSpace.toFloat() / totalSpace.toFloat() else 0f
     val categories by viewModel.allCategories.collectAsState()
+    val isIndexing by viewModel.isIndexing.collectAsState()
+    val progress by viewModel.indexingProgress.collectAsState()
+    val total by viewModel.indexingTotal.collectAsState()
+    val isFirstLaunch by viewModel.isFirstLaunch.collectAsState()
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+    if (isFirstLaunch) {
+        FirstScanLoadingScreen(progress, total)
+    } else {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
         item {
             Image(
                 painter = painterResource(id = R.drawable.img_dashboard_hero),
@@ -485,6 +682,11 @@ fun DashboardScreen(viewModel: MainViewModel) {
         // Storage Distribution Chart
         item {
             D3StorageChart(categories)
+        }
+
+        // Storage Breakdown Card
+        item {
+            StorageBreakdownCard(viewModel)
         }
 
         // Smart Categories Row / Grid
@@ -607,6 +809,13 @@ fun DashboardScreen(viewModel: MainViewModel) {
             val categoryRecs by viewModel.categoryRecommendations.collectAsState()
             val largeRecs by viewModel.largeFileRecommendations.collectAsState()
             val isLoadingRecs by viewModel.isRecommendationsLoading.collectAsState()
+            val isIndexing by viewModel.isIndexing.collectAsState()
+
+            LaunchedEffect(isIndexing) {
+                if (!isIndexing) {
+                    viewModel.loadRecommendations()
+                }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
@@ -692,6 +901,7 @@ fun DashboardScreen(viewModel: MainViewModel) {
         }
     }
 }
+}
 
 @Composable
 fun RecommendationGroup(
@@ -762,7 +972,7 @@ fun RecommendationGroup(
 }
 
 // --- 2. FILE EXPLORER SCREEN ---
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun ExplorerScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
@@ -780,6 +990,7 @@ fun ExplorerScreen(viewModel: MainViewModel) {
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameFileName by remember { mutableStateOf("") }
     var showDetailsDialog by remember { mutableStateOf<FileItem?>(null) }
+    var previewFileItem by remember { mutableStateOf<FileItem?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Toolbar with path address
@@ -1023,7 +1234,7 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                                         }
                                     },
                                     onLongClick = {
-                                        viewModel.toggleFileSelection(file.path)
+                                        previewFileItem = file
                                     }
                                 )
                                 .background(if (isSelected) SaffronPrimary.copy(alpha = 0.15f) else Color.Transparent)
@@ -1083,7 +1294,7 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                                         }
                                     },
                                     onLongClick = {
-                                        viewModel.toggleFileSelection(file.path)
+                                        previewFileItem = file
                                     }
                                 ),
                             colors = CardDefaults.cardColors(
@@ -1391,6 +1602,14 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                     Text("Cancel")
                 }
             }
+        )
+    }
+
+    if (previewFileItem != null) {
+        QuickPreviewBottomSheet(
+            file = previewFileItem!!,
+            viewModel = viewModel,
+            onDismissRequest = { previewFileItem = null }
         )
     }
 }
@@ -2219,160 +2438,261 @@ fun VaultScreen(viewModel: MainViewModel) {
     var pinInput by remember { mutableStateOf("") }
     val isPinSet = viewModel.isVaultPinSet()
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        Text(
-            text = "Secure Vault",
-            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-            color = SaffronPrimary
-        )
-        Text(
-            text = "AES-256 encrypted Keystore safe folder",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color.Gray
-        )
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
 
-        Spacer(modifier = Modifier.height(24.dp))
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "Secure Vault",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                color = SaffronPrimary
+            )
+            Text(
+                text = "AES-256 encrypted Keystore safe folder",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray
+            )
 
-        if (!isAuthenticated) {
-            // Unauthenticated Lock Screen
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.img_vault_lock),
-                    contentDescription = "Safe Vault Lock Illustration",
+            Spacer(modifier = Modifier.height(24.dp))
+
+            if (!isAuthenticated) {
+                // Unauthenticated Lock Screen
+                Column(
                     modifier = Modifier
-                        .size(120.dp)
-                        .clip(RoundedCornerShape(16.dp)),
-                    contentScale = ContentScale.Crop
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = if (isPinSet) "Enter Vault PIN" else "Configure New Vault PIN",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                )
-                Text(
-                    text = if (isPinSet) "Enter 4-digit PIN to access safe folder" else "Choose a 4-digit numeric code to protect your files",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray,
-                    textAlign = TextAlign.Center
-                )
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.img_vault_lock),
+                        contentDescription = "Safe Vault Lock Illustration",
+                        modifier = Modifier
+                            .size(120.dp)
+                            .clip(RoundedCornerShape(16.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = if (isPinSet) "Enter Vault PIN" else "Configure New Vault PIN",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Text(
+                        text = if (isPinSet) "Enter 4-digit PIN to access safe folder" else "Choose a 4-digit numeric code to protect your files",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray,
+                        textAlign = TextAlign.Center
+                    )
 
-                Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(24.dp))
 
-                OutlinedTextField(
-                    value = pinInput,
-                    onValueChange = { if (it.length <= 4) pinInput = it },
-                    label = { Text("PIN") },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = SaffronPrimary, focusedLabelColor = SaffronPrimary),
-                    modifier = Modifier.width(160.dp).testTag("vault_pin_input")
-                )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = pinInput,
+                            onValueChange = { if (it.length <= 4) pinInput = it },
+                            label = { Text("PIN") },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = SaffronPrimary, focusedLabelColor = SaffronPrimary),
+                            modifier = Modifier.width(160.dp).testTag("vault_pin_input")
+                        )
 
-                if (errorMsg != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(errorMsg!!, color = Color.Red, style = MaterialTheme.typography.bodySmall)
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                Button(
-                    onClick = {
-                        if (isPinSet) {
-                            val success = viewModel.authenticateVault(pinInput)
-                            if (success) pinInput = ""
-                        } else {
-                            if (pinInput.length == 4) {
-                                viewModel.setVaultPin(pinInput)
-                                pinInput = ""
-                            }
+                        // Biometric / Fingerprint Option
+                        IconButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Biometric credentials are not configured or available. Please use PIN or Google Sign-In.")
+                                }
+                            },
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .testTag("vault_biometric_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Fingerprint,
+                                contentDescription = "Biometric Unlock",
+                                tint = SaffronPrimary,
+                                modifier = Modifier.size(32.dp)
+                            )
                         }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary),
-                    modifier = Modifier.testTag("vault_submit_button")
-                ) {
-                    Text(if (isPinSet) "Unlock" else "Set PIN & Unlock")
-                }
-            }
-        } else {
-            // Authenticated Vault File Explorer Screen
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Your Encrypted Files", fontWeight = FontWeight.Bold)
-                IconButton(onClick = { viewModel.lockVault() }) {
-                    Icon(Icons.Default.Lock, contentDescription = "Lock Vault", tint = SaffronPrimary)
-                }
-            }
+                    }
 
-            Spacer(modifier = Modifier.height(16.dp))
+                    if (errorMsg != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(errorMsg!!, color = Color.Red, style = MaterialTheme.typography.bodySmall)
+                    }
 
-            if (vaultFiles.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.Lock, contentDescription = "No Files", tint = Color.Gray, modifier = Modifier.size(48.dp))
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("Vault is empty.", color = Color.Gray)
-                        Text("Encrypt files from the standard File Explorer.", style = MaterialTheme.typography.bodySmall, color = SaffronPrimary)
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Button(
+                        onClick = {
+                            if (isPinSet) {
+                                val success = viewModel.authenticateVault(pinInput)
+                                if (success) pinInput = ""
+                            } else {
+                                if (pinInput.length == 4) {
+                                    viewModel.setVaultPin(pinInput)
+                                    pinInput = ""
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary),
+                        modifier = Modifier
+                            .fillMaxWidth(0.8f)
+                            .height(44.dp)
+                            .testTag("vault_submit_button")
+                    ) {
+                        Text(if (isPinSet) "Unlock" else "Set PIN & Unlock")
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "OR",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Google Sign-In Button
+                    Button(
+                        onClick = {
+                            viewModel.authenticateWithGoogle(context) { result ->
+                                when (result) {
+                                    is GoogleSignInResult.Success -> {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("Successfully signed in as ${result.displayName}")
+                                        }
+                                    }
+                                    is GoogleSignInResult.Failure -> {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(result.reason)
+                                        }
+                                    }
+                                    is GoogleSignInResult.Cancelled -> {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("Sign in cancelled")
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White,
+                            contentColor = Color.Black
+                        ),
+                        border = BorderStroke(1.dp, Color(0xFFDADCE0)),
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier
+                            .fillMaxWidth(0.8f)
+                            .height(44.dp)
+                            .testTag("google_sign_in_button"),
+                        contentPadding = PaddingValues(horizontal = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_google),
+                                contentDescription = "Google Logo",
+                                tint = Color.Unspecified,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "Sign in with Google",
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFF3C4043)
+                                )
+                            )
+                        }
                     }
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                // Authenticated Vault File Explorer Screen
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(vaultFiles) { file ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                    Text("Your Encrypted Files", fontWeight = FontWeight.Bold)
+                    IconButton(onClick = { viewModel.lockVault() }) {
+                        Icon(Icons.Default.Lock, contentDescription = "Lock Vault", tint = SaffronPrimary)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                if (vaultFiles.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.Lock, contentDescription = "No Files", tint = Color.Gray, modifier = Modifier.size(48.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text("Vault is empty.", color = Color.Gray)
+                            Text("Encrypt files from the standard File Explorer.", style = MaterialTheme.typography.bodySmall, color = SaffronPrimary)
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(vaultFiles) { file ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                             ) {
                                 Row(
-                                    modifier = Modifier.weight(1f),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Icon(Icons.Default.Lock, contentDescription = "Encrypted", tint = SaffronPrimary)
-                                    Spacer(modifier = Modifier.width(16.dp))
-                                    Column {
-                                        Text(
-                                            file.name,
-                                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            "Encrypted File • ${formatFileSize(file.size)}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray
-                                        )
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Lock, contentDescription = "Encrypted", tint = SaffronPrimary)
+                                        Spacer(modifier = Modifier.width(16.dp))
+                                        Column {
+                                            Text(
+                                                file.name,
+                                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                "Encrypted File • ${formatFileSize(file.size)}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color.Gray
+                                            )
+                                        }
                                     }
-                                }
-                                Button(
-                                    onClick = { viewModel.restoreFileFromVault(file.path) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary)
-                                ) {
-                                    Text("Decrypt")
+                                    Button(
+                                        onClick = { viewModel.restoreFileFromVault(file.path) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary)
+                                    ) {
+                                        Text("Decrypt")
+                                    }
                                 }
                             }
                         }
@@ -2380,6 +2700,13 @@ fun VaultScreen(viewModel: MainViewModel) {
                 }
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(16.dp)
+        )
     }
 }
 
@@ -3336,6 +3663,695 @@ fun AIAssistantScreen(viewModel: MainViewModel) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.Black, strokeWidth = 2.dp)
                 } else {
                     Icon(Icons.Default.Send, contentDescription = "Send", tint = Color.Black)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun QuickPreviewBottomSheet(
+    file: FileItem,
+    viewModel: MainViewModel,
+    onDismissRequest: () -> Unit
+) {
+    val context = LocalContext.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismissRequest,
+        sheetState = sheetState,
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, bottom = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "Quick Preview",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = SaffronPrimary
+            )
+
+            // Content based on type
+            val mime = file.mimeType.lowercase()
+            if (mime.contains("image") || file.name.endsWith(".jpg") || file.name.endsWith(".jpeg") || file.name.endsWith(".png") || file.name.endsWith(".webp")) {
+                // IMAGE
+                var dimensions by remember { mutableStateOf<String?>(null) }
+                LaunchedEffect(file.path) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val exif = android.media.ExifInterface(file.path)
+                            val w = exif.getAttribute(android.media.ExifInterface.TAG_IMAGE_WIDTH)
+                            val h = exif.getAttribute(android.media.ExifInterface.TAG_IMAGE_LENGTH)
+                            if (w != null && h != null) {
+                                dimensions = "${w} x ${h}"
+                            } else {
+                                val options = android.graphics.BitmapFactory.Options().apply {
+                                    inJustDecodeBounds = true
+                                }
+                                android.graphics.BitmapFactory.decodeFile(file.path, options)
+                                if (options.outWidth > 0 && options.outHeight > 0) {
+                                    dimensions = "${options.outWidth} x ${options.outHeight}"
+                                }
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val imageRequest = ImageRequest.Builder(context)
+                        .data(File(file.path))
+                        .size(512)
+                        .precision(Precision.AUTOMATIC)
+                        .dispatcher(Dispatchers.IO)
+                        .build()
+
+                    AsyncImage(
+                        model = imageRequest,
+                        contentDescription = "Image preview",
+                        modifier = Modifier
+                            .size(200.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentScale = ContentScale.Crop
+                    )
+
+                    dimensions?.let {
+                        Text(
+                            text = "Dimensions: $it",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+            } else if (mime.contains("video") || file.name.endsWith(".mp4") || file.name.endsWith(".mkv") || file.name.endsWith(".3gp")) {
+                // VIDEO
+                var videoThumbnail by remember { mutableStateOf<Bitmap?>(null) }
+                var durationText by remember { mutableStateOf<String?>(null) }
+
+                LaunchedEffect(file.path) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val retriever = android.media.MediaMetadataRetriever()
+                            retriever.setDataSource(file.path)
+                            val bitmap = retriever.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                            videoThumbnail = bitmap
+                            val durationMs = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                            if (durationMs != null) {
+                                durationText = formatDuration(durationMs)
+                            }
+                            retriever.release()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(200.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (videoThumbnail != null) {
+                            Image(
+                                bitmap = videoThumbnail!!.asImageBitmap(),
+                                contentDescription = "Video thumbnail",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Video", tint = Color.White, modifier = Modifier.size(48.dp))
+                        }
+
+                        durationText?.let {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(8.dp)
+                                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = it,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (mime.contains("audio") || file.name.endsWith(".mp3") || file.name.endsWith(".wav") || file.name.endsWith(".m4a") || file.name.endsWith(".ogg")) {
+                // AUDIO
+                var audioArtist by remember { mutableStateOf<String?>(null) }
+                var audioAlbum by remember { mutableStateOf<String?>(null) }
+                var audioDuration by remember { mutableStateOf<String?>(null) }
+
+                LaunchedEffect(file.path) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val retriever = android.media.MediaMetadataRetriever()
+                            retriever.setDataSource(file.path)
+                            audioArtist = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "Unknown Artist"
+                            audioAlbum = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: "Unknown Album"
+                            val durationMs = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                            if (durationMs != null) {
+                                audioDuration = formatDuration(durationMs)
+                            }
+                            retriever.release()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = "Audio file",
+                            tint = SaffronPrimary,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = file.name,
+                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "Artist: ${audioArtist ?: "Loading..."}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "Album: ${audioAlbum ?: "Loading..."}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            audioDuration?.let {
+                                Text(
+                                    text = "Duration: $it",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = SaffronPrimary
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                // DOCUMENT/OTHER
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                contentDescription = "File Type Icon",
+                                tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                modifier = Modifier.size(36.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = file.name,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                        Text(text = "Size: ${if (file.isDirectory) "Folder" else formatFileSize(file.size)}", style = MaterialTheme.typography.bodyMedium)
+                        Text(text = "Type: ${file.mimeType.ifEmpty { "Unknown" }}", style = MaterialTheme.typography.bodyMedium)
+                        Text(text = "Modified: ${formatTimestamp(file.lastModified)}", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+
+            // Quick Info/Stats for Image and Video (file name, size, type)
+            if (mime.contains("image") || mime.contains("video")) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    Text(
+                        text = file.name,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "Size: ${formatFileSize(file.size)} • Type: ${file.mimeType}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        text = "Modified: ${formatTimestamp(file.lastModified)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            // ALL types action buttons: Open, Share, Copy, Move, Delete
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Open Action
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable {
+                        onDismissRequest()
+                        if (file.isDirectory) {
+                            viewModel.loadExplorerFiles(file.path)
+                        } else {
+                            try {
+                                val f = File(file.path)
+                                val authority = "${context.packageName}.fileprovider"
+                                val uri = androidx.core.content.FileProvider.getUriForFile(context, authority, f)
+                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, context.contentResolver.getType(uri) ?: "*/*")
+                                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                android.widget.Toast.makeText(context, "No app found to open this file", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                ) {
+                    Icon(imageVector = Icons.Default.Launch, contentDescription = "Open", tint = SaffronPrimary)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Open", style = MaterialTheme.typography.labelSmall)
+                }
+
+                // Share Action (only if not directory)
+                if (!file.isDirectory) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable {
+                            onDismissRequest()
+                            try {
+                                val f = File(file.path)
+                                val authority = "${context.packageName}.fileprovider"
+                                val uri = androidx.core.content.FileProvider.getUriForFile(context, authority, f)
+                                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                    type = context.contentResolver.getType(uri) ?: "*/*"
+                                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(android.content.Intent.createChooser(intent, "Share File"))
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                    ) {
+                        Icon(imageVector = Icons.Default.Share, contentDescription = "Share", tint = SaffronPrimary)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Share", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+
+                // Copy Action
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable {
+                        onDismissRequest()
+                        viewModel.clearSelection()
+                        viewModel.toggleFileSelection(file.path)
+                        viewModel.setClipboard("COPY")
+                    }
+                ) {
+                    Icon(imageVector = Icons.Default.ContentCopy, contentDescription = "Copy", tint = SaffronPrimary)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Copy", style = MaterialTheme.typography.labelSmall)
+                }
+
+                // Move Action
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable {
+                        onDismissRequest()
+                        viewModel.clearSelection()
+                        viewModel.toggleFileSelection(file.path)
+                        viewModel.setClipboard("MOVE")
+                    }
+                ) {
+                    Icon(imageVector = Icons.Default.ContentCut, contentDescription = "Move", tint = SaffronPrimary)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Move", style = MaterialTheme.typography.labelSmall)
+                }
+
+                // Delete Action
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.clickable {
+                        onDismissRequest()
+                        viewModel.deleteSingleFile(file.path)
+                    }
+                ) {
+                    Icon(imageVector = Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Delete", style = MaterialTheme.typography.labelSmall, color = Color.Red)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StorageBreakdownCard(viewModel: MainViewModel) {
+    val categories by viewModel.allCategories.collectAsState()
+    val topFiles by viewModel.top5LargestFiles.collectAsState()
+    val isExpanded by viewModel.isStorageBreakdownExpanded.collectAsState()
+
+    val duplicatesState by viewModel.duplicates.collectAsState()
+    val duplicateWasteBytes = duplicatesState.values.sumOf { groupFiles ->
+        if (groupFiles.size > 1) {
+            groupFiles.first().size * (groupFiles.size - 1)
+        } else {
+            0L
+        }
+    }
+
+    val totalScannedBytes = categories.sumOf { it.totalSize }
+    val freeSpaceBytes = remember {
+        try {
+            val stat = android.os.StatFs(android.os.Environment.getDataDirectory().absolutePath)
+            stat.availableBlocksLong * stat.blockSizeLong
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { viewModel.toggleStorageBreakdown() },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PieChart,
+                        contentDescription = "Storage Breakdown Icon",
+                        tint = SaffronPrimary
+                    )
+                    Text(
+                        text = "Storage Breakdown",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                IconButton(onClick = { viewModel.toggleStorageBreakdown() }) {
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand"
+                    )
+                }
+            }
+
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Donut Chart
+                DonutChart(categories)
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Top 5 Largest Files Bar Chart
+                TopFilesBarChart(topFiles)
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Summary Row
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Summary",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = SaffronPrimary
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(text = "Total Scanned:", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                        Text(text = formatFileSize(totalScannedBytes), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(text = "Duplicate Waste:", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                        Text(text = formatFileSize(duplicateWasteBytes), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = if (duplicateWasteBytes > 0) Color.Red else MaterialTheme.colorScheme.onSurface)
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(text = "System Free Space:", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                        Text(text = formatFileSize(freeSpaceBytes), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = SaffronSecondary)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DonutChart(categories: List<com.example.data.database.CategoryEntity>) {
+    val totalSize = categories.sumOf { it.totalSize }
+    if (totalSize == 0L) {
+        Box(
+            modifier = Modifier
+                .size(150.dp)
+                .background(Color.Transparent),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(modifier = Modifier.size(120.dp)) {
+                drawCircle(
+                    color = Color.Gray.copy(alpha = 0.3f),
+                    style = Stroke(width = 16.dp.toPx())
+                )
+            }
+            Text(
+                text = "No Data",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.Gray
+            )
+        }
+        return
+    }
+
+    val colors = listOf(
+        SaffronPrimary,
+        SaffronSecondary,
+        SaffronTertiary,
+        Color(0xFF64B5F6),
+        Color(0xFF81C784),
+        Color(0xFFE57373),
+        Color(0xFFFFB74D)
+    )
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceEvenly
+    ) {
+        // Draw the Donut Arc
+        Box(
+            modifier = Modifier.size(150.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(modifier = Modifier.size(125.dp)) {
+                var startAngle = -90f
+                categories.forEachIndexed { index, category ->
+                    val percentage = if (totalSize > 0) category.totalSize.toFloat() / totalSize.toFloat() else 0f
+                    val sweepAngle = percentage * 360f
+                    if (sweepAngle > 0f) {
+                        drawArc(
+                            color = colors[index % colors.size],
+                            startAngle = startAngle,
+                            sweepAngle = sweepAngle,
+                            useCenter = false,
+                            style = Stroke(width = 18.dp.toPx())
+                        )
+                        startAngle += sweepAngle
+                    }
+                }
+            }
+        }
+
+        // Legend with labels and percentages
+        Column(
+            modifier = Modifier.padding(start = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            categories.forEachIndexed { index, category ->
+                val percentage = if (totalSize > 0) (category.totalSize.toFloat() / totalSize.toFloat() * 100).toInt() else 0
+                if (category.totalSize > 0L) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .background(colors[index % colors.size], RoundedCornerShape(2.dp))
+                        )
+                        Text(
+                            text = "${category.name}: $percentage% (${formatFileSize(category.totalSize)})",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TopFilesBarChart(topFiles: List<com.example.data.database.DbFile>) {
+    if (topFiles.isEmpty()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(100.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "No file data available",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.Gray
+            )
+        }
+        return
+    }
+
+    val maxSize = topFiles.maxOfOrNull { it.size } ?: 1L
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Top 5 Largest Files",
+            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+            color = SaffronPrimary
+        )
+
+        topFiles.forEachIndexed { index, file ->
+            val ratio = file.size.toFloat() / maxSize.toFloat()
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = file.name,
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = formatFileSize(file.size),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SaffronSecondary
+                    )
+                }
+
+                // Beautiful custom Bar using Canvas
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(10.dp)
+                ) {
+                    // Background bar
+                    drawRect(
+                        color = Color.Gray.copy(alpha = 0.2f),
+                        size = size
+                    )
+                    // Filled progress bar
+                    drawRect(
+                        color = SaffronPrimary.copy(alpha = 0.8f),
+                        size = size.copy(width = size.width * ratio)
+                    )
                 }
             }
         }

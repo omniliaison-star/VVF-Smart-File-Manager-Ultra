@@ -9,9 +9,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      JAVA_TOOL_OPTIONS: "-Dfile.encoding=UTF-8"
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "false"
 
     steps:
     - name: Checkout Source Code
+      # Note: actions/checkout@v4 natively supports running on Node 20 and is forced on Node 24 in newer environments
       uses: actions/checkout@v4
 
     - name: Set up JDK 17

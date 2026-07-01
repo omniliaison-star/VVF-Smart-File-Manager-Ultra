@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import com.example.data.database.AppDatabase
+import androidx.room.withTransaction
 import kotlinx.coroutines.withContext
 
 class FileRepository(
@@ -431,37 +432,48 @@ class FileRepository(
             val counts = categories.associateWith { 0 }.toMutableMap()
             val sizes = categories.associateWith { 0L }.toMutableMap()
 
-            allFiles.forEachIndexed { index, file ->
-                val dbFile = DbFile(
-                    path = file.absolutePath,
-                    name = file.name,
-                    size = file.length(),
-                    mimeType = getMimeType(file),
-                    createdAt = file.lastModified(),
-                    modifiedAt = file.lastModified()
-                )
-                val id = fileDao.insertFile(dbFile)
+            val db = AppDatabase.getDatabase(context)
+            val batchSize = 50
+            for (i in allFiles.indices step batchSize) {
+                val end = minOf(i + batchSize, total)
+                val batchFiles = allFiles.subList(i, end)
+                
+                db.withTransaction {
+                    for (file in batchFiles) {
+                        val dbFile = DbFile(
+                            path = file.absolutePath,
+                            name = file.name,
+                            size = file.length(),
+                            mimeType = getMimeType(file),
+                            createdAt = file.lastModified(),
+                            modifiedAt = file.lastModified()
+                        )
+                        val id = fileDao.insertFile(dbFile)
 
-                // Classify
-                val category = classifyFile(dbFile)
-                counts[category] = (counts[category] ?: 0) + 1
-                sizes[category] = (sizes[category] ?: 0L) + dbFile.size
+                        // Classify
+                        val category = classifyFile(dbFile)
+                        counts[category] = (counts[category] ?: 0) + 1
+                        sizes[category] = (sizes[category] ?: 0L) + dbFile.size
 
-                // If Gemini API Key is available, fetch embedding for documents
-                if (GeminiService.isApiKeyAvailable() && (dbFile.mimeType.contains("text") || dbFile.mimeType.contains("pdf"))) {
-                    try {
-                        val fileContent = file.readText().take(1000) // embed first 1000 chars
-                        val vector = GeminiService.getEmbedding(fileContent)
-                        if (vector != null) {
-                            val vectorString = vector.joinToString(",")
-                            embeddingDao.insertEmbedding(DbEmbedding(fileId = id, vectorData = vectorString))
+                        // If Gemini API Key is available, fetch embedding for documents
+                        if (GeminiService.isApiKeyAvailable() && (dbFile.mimeType.contains("text") || dbFile.mimeType.contains("pdf"))) {
+                            try {
+                                val fileContent = file.readText().take(1000) // embed first 1000 chars
+                                val vector = GeminiService.getEmbedding(fileContent)
+                                if (vector != null) {
+                                    val vectorString = vector.joinToString(",")
+                                    embeddingDao.insertEmbedding(DbEmbedding(fileId = id, vectorData = vectorString))
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed embedding file ${file.name}: ${e.message}")
+                            }
                         }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed embedding file ${file.name}: ${e.message}")
                     }
                 }
                 
-                onProgress(index + 1, total)
+                onProgress(end, total)
+                kotlinx.coroutines.yield()
+                System.gc()
             }
 
             // After classification, upsert aggregated counts/sizes into CategoryEntity
@@ -509,8 +521,9 @@ class FileRepository(
     suspend fun findDuplicates(): Map<String, List<FileItem>> = withContext(Dispatchers.IO) {
         val duplicatesMap = mutableMapOf<String, MutableList<FileItem>>()
         val filesByMD5 = mutableMapOf<String, MutableList<FileItem>>()
+        var filesProcessed = 0
         
-        fun traverse(dir: File) {
+        suspend fun traverse(dir: File) {
             val list = dir.listFiles() ?: return
             for (f in list) {
                 if (f.isDirectory) {
@@ -528,6 +541,10 @@ class FileRepository(
                             lastModified = f.lastModified()
                         )
                         filesByMD5.getOrPut(md5) { mutableListOf() }.add(item)
+                    }
+                    filesProcessed++
+                    if (filesProcessed % 50 == 0) {
+                        kotlinx.coroutines.yield()
                     }
                 }
             }

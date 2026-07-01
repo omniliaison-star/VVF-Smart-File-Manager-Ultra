@@ -6,6 +6,18 @@ import com.example.util.EncryptionHelper
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import androidx.credentials.CredentialManager
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.NoCredentialException
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+
+sealed class GoogleSignInResult {
+    data class Success(val email: String, val displayName: String, val idToken: String) : GoogleSignInResult()
+    data class Failure(val reason: String) : GoogleSignInResult()
+    object Cancelled : GoogleSignInResult()
+}
 
 class VaultRepository(
     private val context: Context,
@@ -75,6 +87,24 @@ class VaultRepository(
         return false
     }
 
+    fun getGoogleEmailHash(): String? {
+        return sharedPrefs.getString("vault_google_email_hash", null)
+    }
+
+    fun saveGoogleEmailHash(hash: String): Boolean {
+        return sharedPrefs.edit().putString("vault_google_email_hash", hash).commit()
+    }
+
+    fun hashEmail(email: String): String {
+        return try {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val hashBytes = digest.digest(email.lowercase().trim().toByteArray(Charsets.UTF_8))
+            hashBytes.joinToString("") { "%02x".format(it) }
+        } catch (e: Exception) {
+            email
+        }
+    }
+
     suspend fun getVaultFiles(): List<FileItem> = withContext(Dispatchers.IO) {
         val vaultDir = fileRepository.vaultRoot
         val files = vaultDir.listFiles() ?: return@withContext emptyList()
@@ -126,6 +156,41 @@ class VaultRepository(
         } catch (e: Exception) {
             e.printStackTrace()
             return@withContext false
+        }
+    }
+
+    suspend fun signInWithGoogle(context: Context): GoogleSignInResult = withContext(Dispatchers.Main) {
+        try {
+            val credentialManager = CredentialManager.create(context)
+            val googleIdOption = GetGoogleIdOption.Builder()
+                .setServerClientId("605488539075-kf4jb3l2ibrgmftd9lm7po76d8jg4f21.apps.googleusercontent.com")
+                .setFilterByAuthorizedAccounts(false)
+                .setAutoSelectEnabled(false)
+                .build()
+
+            val request = GetCredentialRequest.Builder()
+                .addCredentialOption(googleIdOption)
+                .build()
+
+            val result = credentialManager.getCredential(context, request)
+            val credential = result.credential
+
+            if (credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
+                GoogleSignInResult.Success(
+                    email = googleIdTokenCredential.id,
+                    displayName = googleIdTokenCredential.displayName ?: "",
+                    idToken = googleIdTokenCredential.idToken
+                )
+            } else {
+                GoogleSignInResult.Failure("Unexpected credential type: ${credential.type}")
+            }
+        } catch (e: GetCredentialCancellationException) {
+            GoogleSignInResult.Cancelled
+        } catch (e: NoCredentialException) {
+            GoogleSignInResult.Failure("No Google account found on this device. Please use PIN instead.")
+        } catch (e: Exception) {
+            GoogleSignInResult.Failure(e.localizedMessage ?: "Unknown error")
         }
     }
 }
