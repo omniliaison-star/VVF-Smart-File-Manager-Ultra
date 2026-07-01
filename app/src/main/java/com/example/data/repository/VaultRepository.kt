@@ -14,7 +14,7 @@ import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 
 sealed class GoogleSignInResult {
-    data class Success(val email: String, val displayName: String, val idToken: String) : GoogleSignInResult()
+    data class Success(val email: String, val displayName: String) : GoogleSignInResult()
     data class Failure(val reason: String) : GoogleSignInResult()
     object Cancelled : GoogleSignInResult()
 }
@@ -177,10 +177,16 @@ class VaultRepository(
 
             if (credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdTokenCredential = GoogleIdTokenCredential.createFrom(credential.data)
+                val email = googleIdTokenCredential.id
+                val displayName = googleIdTokenCredential.displayName ?: ""
+                
+                // Store SHA-256 hash of email in SharedPreferences
+                val emailHash = hashEmail(email)
+                saveGoogleEmailHash(emailHash)
+
                 GoogleSignInResult.Success(
-                    email = googleIdTokenCredential.id,
-                    displayName = googleIdTokenCredential.displayName ?: "",
-                    idToken = googleIdTokenCredential.idToken
+                    email = email,
+                    displayName = displayName
                 )
             } else {
                 GoogleSignInResult.Failure("Unexpected credential type: ${credential.type}")
@@ -188,7 +194,7 @@ class VaultRepository(
         } catch (e: GetCredentialCancellationException) {
             GoogleSignInResult.Cancelled
         } catch (e: NoCredentialException) {
-            GoogleSignInResult.Failure("No Google account found on this device. Please use PIN instead.")
+            GoogleSignInResult.Failure("No Google account found. Use PIN instead.")
         } catch (e: Exception) {
             GoogleSignInResult.Failure(e.localizedMessage ?: "Unknown error")
         }

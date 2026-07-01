@@ -23,6 +23,11 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
+import java.io.InputStream
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -1015,6 +1020,101 @@ class FileRepository(
         } catch (e: Exception) {
             Log.e("FileRepository", "Error in getLargeFilesRecommendation: ${e.message}", e)
             emptyList()
+        }
+    }
+
+    suspend fun extractTextContent(filePath: String, mimeType: String): String = withContext(Dispatchers.IO) {
+        try {
+            val file = File(filePath)
+            if (!file.exists() || file.isDirectory) return@withContext ""
+
+            when {
+                mimeType == "text/plain" || mimeType == "text/csv" || filePath.endsWith(".txt", ignoreCase = true) || filePath.endsWith(".csv", ignoreCase = true) -> {
+                    val content = file.readText(Charsets.UTF_8)
+                    if (content.length > 50000) {
+                        content.substring(0, 50000)
+                    } else {
+                        content
+                    }
+                }
+                mimeType == "application/pdf" || filePath.endsWith(".pdf", ignoreCase = true) -> {
+                    val builder = StringBuilder()
+                    try {
+                        val bytes = file.readBytes()
+                        var i = 0
+                        while (i < bytes.size && builder.length < 50000) {
+                            if (bytes[i] == '('.code.toByte()) {
+                                i++
+                                val temp = StringBuilder()
+                                var escaped = false
+                                while (i < bytes.size) {
+                                    val b = bytes[i]
+                                    if (escaped) {
+                                        temp.append(b.toInt().toChar())
+                                        escaped = false
+                                    } else if (b == '\\'.code.toByte()) {
+                                        escaped = true
+                                    } else if (b == ')'.code.toByte()) {
+                                        break
+                                    } else {
+                                        temp.append(b.toInt().toChar())
+                                    }
+                                    i++
+                                }
+                                val str = temp.toString().trim()
+                                if (str.length > 1 && str.any { it.isLetterOrDigit() }) {
+                                    builder.append(str).append(" ")
+                                }
+                            }
+                            i++
+                        }
+                    } catch (e: Exception) {
+                        Log.e("FileRepository", "Raw PDF parsing failed: ${e.message}")
+                    }
+
+                    val fullPdfText = builder.toString().trim()
+                    if (fullPdfText.length < 100) {
+                        "PDF text extraction is not supported without a third-party library. Only the file name and metadata can be summarized."
+                    } else if (fullPdfText.length > 50000) {
+                        fullPdfText.substring(0, 50000)
+                    } else {
+                        fullPdfText
+                    }
+                }
+                mimeType.contains("wordprocessingml") || filePath.endsWith(".docx", ignoreCase = true) -> {
+                    val builder = StringBuilder()
+                    ZipInputStream(FileInputStream(file)).use { zip ->
+                        var entry: ZipEntry? = zip.nextEntry
+                        while (entry != null) {
+                            if (entry.name == "word/document.xml") {
+                                val buffer = ByteArray(4096)
+                                val out = java.io.ByteArrayOutputStream()
+                                var len = zip.read(buffer)
+                                while (len > 0) {
+                                    out.write(buffer, 0, len)
+                                    len = zip.read(buffer)
+                                }
+                                val rawXml = out.toString("UTF-8")
+                                val cleanText = rawXml.replace(Regex("<[^>]+>"), " ")
+                                builder.append(cleanText)
+                                break
+                            }
+                            zip.closeEntry()
+                            entry = zip.nextEntry
+                        }
+                    }
+                    val docxText = builder.toString().replace(Regex("\\s+"), " ").trim()
+                    if (docxText.length > 50000) {
+                        docxText.substring(0, 50000)
+                    } else {
+                        docxText
+                    }
+                }
+                else -> ""
+            }
+        } catch (e: Exception) {
+            Log.e("FileRepository", "Error extracting text content: ${e.message}", e)
+            ""
         }
     }
 }

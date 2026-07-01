@@ -7,6 +7,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -40,6 +42,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.paging.compose.collectAsLazyPagingItems
 import com.example.MainViewModel
 import com.example.Screen
+import com.example.SummarizationState
 import com.example.R
 import com.example.data.model.FileItem
 import com.example.ui.theme.SaffronPrimary
@@ -991,6 +994,7 @@ fun ExplorerScreen(viewModel: MainViewModel) {
     var renameFileName by remember { mutableStateOf("") }
     var showDetailsDialog by remember { mutableStateOf<FileItem?>(null) }
     var previewFileItem by remember { mutableStateOf<FileItem?>(null) }
+    var showSummarizationDialogForFile by remember { mutableStateOf<FileItem?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Toolbar with path address
@@ -1526,6 +1530,24 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                         }
                     }
 
+                    // Dedicated Summarize with AI option
+                    if (!file.isDirectory) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    showSummarizationDialogForFile = file
+                                    activeFileItemForMenu = null
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Star, contentDescription = "Summarize with AI", tint = SaffronPrimary)
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Text("Summarize with AI")
+                        }
+                    }
+
                     // Delete option
                     Row(
                         modifier = Modifier
@@ -1609,7 +1631,102 @@ fun ExplorerScreen(viewModel: MainViewModel) {
         QuickPreviewBottomSheet(
             file = previewFileItem!!,
             viewModel = viewModel,
-            onDismissRequest = { previewFileItem = null }
+            onDismissRequest = { previewFileItem = null },
+            onSummarize = {
+                showSummarizationDialogForFile = it
+                previewFileItem = null
+            }
+        )
+    }
+
+    if (showSummarizationDialogForFile != null) {
+        val file = showSummarizationDialogForFile!!
+        val summarizationState by viewModel.summarizationState.collectAsState()
+
+        AlertDialog(
+            onDismissRequest = {
+                showSummarizationDialogForFile = null
+                viewModel.resetSummarization()
+            },
+            title = {
+                Text(
+                    text = "AI Document Summary",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "File: ${file.name}",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        modifier = Modifier.padding(bottom = 12.dp),
+                        textAlign = TextAlign.Center
+                    )
+
+                    when (val state = summarizationState) {
+                        is SummarizationState.Idle -> {
+                            LaunchedEffect(file) {
+                                viewModel.summarizeDocument(file)
+                            }
+                            CircularProgressIndicator(color = SaffronPrimary)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(text = "Initializing...", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        is SummarizationState.Loading -> {
+                            CircularProgressIndicator(color = SaffronPrimary)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(text = "Analyzing document...", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        is SummarizationState.Success -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .verticalScroll(rememberScrollState())
+                                    .heightIn(max = 300.dp)
+                            ) {
+                                Text(
+                                    text = state.summary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                            }
+                        }
+                        is SummarizationState.Error -> {
+                            Text(
+                                text = state.msg,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(bottom = 16.dp),
+                                textAlign = TextAlign.Center
+                            )
+                            if (state.msg != "This file type cannot be summarized") {
+                                Button(
+                                    onClick = { viewModel.summarizeDocument(file) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary)
+                                ) {
+                                    Text("Retry", color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showSummarizationDialogForFile = null
+                        viewModel.resetSummarization()
+                    }
+                ) {
+                    Text("Close", color = SaffronPrimary)
+                }
+            }
         )
     }
 }
@@ -3674,7 +3791,8 @@ fun AIAssistantScreen(viewModel: MainViewModel) {
 fun QuickPreviewBottomSheet(
     file: FileItem,
     viewModel: MainViewModel,
-    onDismissRequest: () -> Unit
+    onDismissRequest: () -> Unit,
+    onSummarize: (FileItem) -> Unit
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -4041,6 +4159,21 @@ fun QuickPreviewBottomSheet(
                     Icon(imageVector = Icons.Default.ContentCut, contentDescription = "Move", tint = SaffronPrimary)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text("Move", style = MaterialTheme.typography.labelSmall)
+                }
+
+                // Summarize Action (only if not directory)
+                if (!file.isDirectory) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable {
+                            onDismissRequest()
+                            onSummarize(file)
+                        }
+                    ) {
+                        Icon(imageVector = Icons.Default.Star, contentDescription = "Summarize with AI", tint = SaffronPrimary)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Summarize with AI", style = MaterialTheme.typography.labelSmall)
+                    }
                 }
 
                 // Delete Action

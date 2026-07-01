@@ -167,6 +167,75 @@ object GeminiService {
         }
     }
 
+    suspend fun summarizeDocument(content: String, fileName: String): String = withContext(Dispatchers.IO) {
+        if (content.trim().isEmpty()) {
+            return@withContext "Could not extract text from this file."
+        }
+
+        if (!isApiKeyAvailable()) {
+            return@withContext "Gemini API key not configured. Please add your key in Settings."
+        }
+
+        val processedContent = if (content.length > 30000) {
+            content.substring(0, 30000) + "\n[Document truncated for summarization]"
+        } else {
+            content
+        }
+
+        val prompt = "Summarize this document concisely in 3-5 bullet points. Document name: $fileName\n\nContent:\n$processedContent"
+        val modelName = "gemini-2.5-flash"
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey"
+
+        try {
+            val jsonPayload = JSONObject().apply {
+                put("contents", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("text", prompt)
+                            })
+                        })
+                    })
+                })
+            }
+
+            val request = Request.Builder()
+                .url(url)
+                .post(jsonPayload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string() ?: ""
+                    Log.e(TAG, "Summarization API Request Failed: ${response.code} $errorBody")
+                    val errorMsg = try {
+                        val errorJson = JSONObject(errorBody)
+                        val errorObj = errorJson.optJSONObject("error")
+                        errorObj?.optString("message") ?: response.message
+                    } catch (e: Exception) {
+                        response.message
+                    }
+                    return@withContext "Summarization failed: $errorMsg"
+                }
+
+                val bodyString = response.body?.string() ?: return@withContext "Summarization failed: Empty response"
+                val jsonResponse = JSONObject(bodyString)
+                val candidates = jsonResponse.optJSONArray("candidates") ?: return@withContext "Summarization failed: No candidates found"
+                if (candidates.length() == 0) return@withContext "Summarization failed: No output candidate"
+                
+                val firstCandidate = candidates.getJSONObject(0)
+                val responseContent = firstCandidate.optJSONObject("content") ?: return@withContext "Summarization failed: No content"
+                val parts = responseContent.optJSONArray("parts") ?: return@withContext "Summarization failed: No parts"
+                if (parts.length() == 0) return@withContext "Summarization failed: No parts content"
+                
+                return@withContext parts.getJSONObject(0).optString("text", "No text found")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error summarizing document: ${e.message}", e)
+            return@withContext "Summarization failed: ${e.message}"
+        }
+    }
+
     /**
      * Helper to compute cosine similarity between two float vectors.
      */

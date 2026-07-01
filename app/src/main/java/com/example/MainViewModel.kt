@@ -47,6 +47,13 @@ sealed class Screen {
     object AIAssistant : Screen()
 }
 
+sealed class SummarizationState {
+    object Idle : SummarizationState()
+    object Loading : SummarizationState()
+    data class Success(val summary: String) : SummarizationState()
+    data class Error(val msg: String) : SummarizationState()
+}
+
 data class CloudFile(
     val id: String,
     val name: String,
@@ -404,6 +411,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSendingMessage = MutableStateFlow(false)
     val isSendingMessage: StateFlow<Boolean> = _isSendingMessage.asStateFlow()
 
+    private val _summarizationState = MutableStateFlow<SummarizationState>(SummarizationState.Idle)
+    val summarizationState: StateFlow<SummarizationState> = _summarizationState.asStateFlow()
+
     init {
         // Load API override key
         val prefs = application.getSharedPreferences("vvf_api_prefs", android.content.Context.MODE_PRIVATE)
@@ -760,6 +770,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun lockVault() {
         _isVaultAuthenticated.value = false
+    }
+
+    fun summarizeDocument(fileItem: FileItem) {
+        val mt = fileItem.mimeType.lowercase()
+        val name = fileItem.name.lowercase()
+        val isDoc = mt == "application/pdf" || mt == "text/plain" || mt == "text/csv" ||
+                mt.startsWith("application/vnd.openxmlformats") ||
+                name.endsWith(".pdf") || name.endsWith(".txt") || name.endsWith(".csv") || name.endsWith(".docx")
+
+        if (!isDoc) {
+            _summarizationState.value = SummarizationState.Error("This file type cannot be summarized")
+            return
+        }
+
+        _summarizationState.value = SummarizationState.Loading
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val text = fileRepository.extractTextContent(fileItem.path, fileItem.mimeType)
+                if (text.isEmpty()) {
+                    _summarizationState.value = SummarizationState.Error("Could not extract text from this file.")
+                    return@launch
+                }
+                val summary = GeminiService.summarizeDocument(text, fileItem.name)
+                if (summary.startsWith("Summarization failed:") || summary.startsWith("Gemini API key not configured.")) {
+                    _summarizationState.value = SummarizationState.Error(summary)
+                } else {
+                    _summarizationState.value = SummarizationState.Success(summary)
+                }
+            } catch (e: Exception) {
+                _summarizationState.value = SummarizationState.Error("Summarization failed: ${e.message}")
+            }
+        }
+    }
+
+    fun resetSummarization() {
+        _summarizationState.value = SummarizationState.Idle
     }
 
     fun loadVault() {
