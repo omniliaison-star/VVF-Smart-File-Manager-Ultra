@@ -23,8 +23,6 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.security.MessageDigest
-import android.graphics.pdf.PdfRenderer
-import android.os.ParcelFileDescriptor
 import java.io.InputStream
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipEntry
@@ -1097,6 +1095,50 @@ class FileRepository(
         }
     }
 
+    private fun extractPdfText(inputStream: java.io.InputStream): String {
+        val builder = StringBuilder()
+        try {
+            val reader = inputStream.buffered()
+            val tempWord = java.io.ByteArrayOutputStream()
+            var byteVal = reader.read()
+            while (byteVal != -1 && builder.length < 50000) {
+                // Printable ASCII or common whitespace or UTF-8 non-ASCII characters (>= 128)
+                if (byteVal in 32..126 || byteVal == 10 || byteVal == 13 || byteVal == 9 || byteVal >= 128) {
+                    tempWord.write(byteVal)
+                } else {
+                    if (tempWord.size() > 0) {
+                        try {
+                            val word = tempWord.toString("UTF-8").trim()
+                            if (word.length >= 2 && word.any { it.isLetterOrDigit() }) {
+                                val isPdfKeyword = word.startsWith("/") || 
+                                                 word == "obj" || word == "endobj" || 
+                                                 word == "stream" || word == "endstream" || 
+                                                 word == "xref" || word == "trailer" || 
+                                                 word == "startxref"
+                                if (!isPdfKeyword) {
+                                    builder.append(word).append(" ")
+                                }
+                            }
+                        } catch (e: Exception) {}
+                        tempWord.reset()
+                    }
+                }
+                byteVal = reader.read()
+            }
+            if (tempWord.size() > 0) {
+                try {
+                    val word = tempWord.toString("UTF-8").trim()
+                    if (word.length >= 2 && word.any { it.isLetterOrDigit() }) {
+                        builder.append(word)
+                    }
+                } catch (e: Exception) {}
+            }
+        } catch (e: Exception) {
+            Log.e("FileRepository", "Error in extractPdfText: ${e.message}", e)
+        }
+        return builder.toString().trim()
+    }
+
     suspend fun extractTextContent(filePath: String, mimeType: String): String = withContext(Dispatchers.IO) {
         try {
             val file = File(filePath)
@@ -1112,43 +1154,16 @@ class FileRepository(
                     }
                 }
                 mimeType == "application/pdf" || filePath.endsWith(".pdf", ignoreCase = true) -> {
-                    val builder = StringBuilder()
-                    try {
-                        val bytes = file.readBytes()
-                        var i = 0
-                        while (i < bytes.size && builder.length < 50000) {
-                            if (bytes[i] == '('.code.toByte()) {
-                                i++
-                                val temp = StringBuilder()
-                                var escaped = false
-                                while (i < bytes.size) {
-                                    val b = bytes[i]
-                                    if (escaped) {
-                                        temp.append(b.toInt().toChar())
-                                        escaped = false
-                                    } else if (b == '\\'.code.toByte()) {
-                                        escaped = true
-                                    } else if (b == ')'.code.toByte()) {
-                                        break
-                                    } else {
-                                        temp.append(b.toInt().toChar())
-                                    }
-                                    i++
-                                }
-                                val str = temp.toString().trim()
-                                if (str.length > 1 && str.any { it.isLetterOrDigit() }) {
-                                    builder.append(str).append(" ")
-                                }
-                            }
-                            i++
+                    val fullPdfText = try {
+                        java.io.FileInputStream(file).use { fis ->
+                            extractPdfText(fis)
                         }
                     } catch (e: Exception) {
-                        Log.e("FileRepository", "Raw PDF parsing failed: ${e.message}")
+                        Log.e("FileRepository", "Error reading local PDF file: ${e.message}", e)
+                        ""
                     }
-
-                    val fullPdfText = builder.toString().trim()
                     if (fullPdfText.length < 100) {
-                        "PDF text extraction is not supported without a third-party library. Only the file name and metadata can be summarized."
+                        "PDF text extraction resulted in insufficient text (less than 100 characters). This might be a scanned document, image-only PDF, or encrypted file. Only the file name and metadata can be summarized."
                     } else if (fullPdfText.length > 50000) {
                         fullPdfText.substring(0, 50000)
                     } else {
@@ -1237,43 +1252,9 @@ class FileRepository(
                         }
                     }
                     isPdf -> {
-                        val builder = StringBuilder()
-                        try {
-                            val bytes = inputStream.readBytes()
-                            var i = 0
-                            while (i < bytes.size && builder.length < 50000) {
-                                if (bytes[i] == '('.code.toByte()) {
-                                    i++
-                                    val temp = StringBuilder()
-                                    var escaped = false
-                                    while (i < bytes.size) {
-                                        val b = bytes[i]
-                                        if (escaped) {
-                                            temp.append(b.toInt().toChar())
-                                            escaped = false
-                                        } else if (b == '\\'.code.toByte()) {
-                                            escaped = true
-                                        } else if (b == ')'.code.toByte()) {
-                                            break
-                                        } else {
-                                            temp.append(b.toInt().toChar())
-                                        }
-                                        i++
-                                    }
-                                    val str = temp.toString().trim()
-                                    if (str.length > 1 && str.any { it.isLetterOrDigit() }) {
-                                        builder.append(str).append(" ")
-                                    }
-                                }
-                                i++
-                            }
-                        } catch (e: Exception) {
-                            Log.e("FileRepository", "Raw PDF parsing failed: ${e.message}")
-                        }
-
-                        val fullPdfText = builder.toString().trim()
+                        val fullPdfText = extractPdfText(inputStream)
                         if (fullPdfText.length < 100) {
-                            "PDF text extraction is not supported without a third-party library. Only the file name and metadata can be summarized."
+                            "PDF text extraction resulted in insufficient text (less than 100 characters). This might be a scanned document, image-only PDF, or encrypted file. Only the file name and metadata can be summarized."
                         } else if (fullPdfText.length > 50000) {
                             fullPdfText.substring(0, 50000)
                         } else {
