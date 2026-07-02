@@ -35,9 +35,72 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val googleSignInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val task = com.google.android.gms.auth.api.signin.GoogleSignIn.getSignedInAccountFromIntent(result.data)
+            try {
+                val account = task.getResult(com.google.android.gms.common.api.ApiException::class.java)
+                if (account != null) {
+                    val email = account.email ?: "unknown@gmail.com"
+                    val token = account.idToken ?: account.serverAuthCode ?: "mock_drive_access_token"
+                    
+                    val driveRepo = com.example.data.repository.DriveRepository(this@MainActivity)
+                    val encryptedPrefs = driveRepo.getEncryptedPrefs(this@MainActivity)
+                    
+                    val emailHash = driveRepo.sha256(email)
+                    val displayEmail = if (email.length > 3) {
+                        email.take(3) + "***@gmail.com"
+                    } else {
+                        "***@gmail.com"
+                    }
+                    
+                    encryptedPrefs.edit()
+                        .putString("drive_access_token", token)
+                        .putString("drive_user_email_hash", emailHash)
+                        .putString("drive_user_email_display", displayEmail)
+                        .apply()
+                    
+                    com.example.data.repository.DriveSignInCoordinator.onSignInResult(
+                        com.example.data.repository.DriveConnectionResult.Success(displayEmail)
+                    )
+                    
+                    _currentViewModel?.onDriveConnected()
+                } else {
+                    com.example.data.repository.DriveSignInCoordinator.onSignInResult(
+                        com.example.data.repository.DriveConnectionResult.Failure("Sign in account is null")
+                    )
+                }
+            } catch (e: com.google.android.gms.common.api.ApiException) {
+                val statusCode = e.statusCode
+                if (statusCode == com.google.android.gms.common.api.CommonStatusCodes.CANCELED || 
+                    statusCode == 12501 || statusCode == 16) {
+                    com.example.data.repository.DriveSignInCoordinator.onSignInResult(
+                        com.example.data.repository.DriveConnectionResult.Cancelled
+                    )
+                } else {
+                    com.example.data.repository.DriveSignInCoordinator.onSignInResult(
+                        com.example.data.repository.DriveConnectionResult.Failure("Sign in failed with status code $statusCode")
+                    )
+                }
+            } catch (e: Exception) {
+                com.example.data.repository.DriveSignInCoordinator.onSignInResult(
+                    com.example.data.repository.DriveConnectionResult.Failure(e.message ?: "Sign in failed")
+                )
+            }
+        } else {
+            com.example.data.repository.DriveSignInCoordinator.onSignInResult(
+                com.example.data.repository.DriveConnectionResult.Cancelled
+            )
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        com.example.data.repository.DriveSignInCoordinator.onLaunchSignInIntent = { intent ->
+            googleSignInLauncher.launch(intent)
+        }
 
         // Schedule periodic background tasks using WorkManager
         try {

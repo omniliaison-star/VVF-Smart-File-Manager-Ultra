@@ -49,6 +49,16 @@ android {
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+
+  packaging {
+    resources {
+      excludes += "META-INF/DEPENDENCIES"
+      excludes += "META-INF/LICENSE"
+      excludes += "META-INF/LICENSE.txt"
+      excludes += "META-INF/NOTICE"
+      excludes += "META-INF/NOTICE.txt"
+    }
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
@@ -83,6 +93,11 @@ dependencies {
   implementation(libs.androidx.credentials.play.services.auth)
   implementation(libs.googleid)
   implementation(libs.androidx.documentfile)
+  implementation(libs.androidx.security.crypto)
+  implementation(libs.google.play.services.auth)
+  implementation(libs.google.api.services.drive)
+  implementation(libs.google.api.client.android)
+  implementation(libs.google.oauth.client.jetty)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

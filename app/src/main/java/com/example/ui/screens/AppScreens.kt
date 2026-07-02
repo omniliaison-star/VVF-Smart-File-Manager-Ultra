@@ -3530,20 +3530,30 @@ fun SettingsScreen(viewModel: MainViewModel) {
 // --- 9. GOOGLE DRIVE SIM / CLOUD MANAGER ---
 @Composable
 fun CloudManagerScreen(viewModel: MainViewModel) {
-    val cloudAccounts by viewModel.cloudAccounts.collectAsState()
-    val selectedAccount by viewModel.selectedCloudAccount.collectAsState()
-    val cloudFiles = viewModel.filteredCloudFiles()
-    val selectedFiles by viewModel.selectedCloudFiles.collectAsState()
-    val cloudSearchQuery by viewModel.cloudSearchQuery.collectAsState()
+    val context = LocalContext.current
+    val isDriveConnected by viewModel.isDriveConnected.collectAsState()
+    val driveFiles by viewModel.driveFiles.collectAsState()
+    val driveConnectionState by viewModel.driveConnectionState.collectAsState()
+    val connectedEmail = viewModel.driveConnectedEmail
 
-    // Semantic scan state
-    val scanProgress by viewModel.semanticScanProgress.collectAsState()
-    val scanStatus by viewModel.semanticScanStatus.collectAsState()
-    val scanMatchPercent by viewModel.semanticScanMatchPercent.collectAsState()
-    val isScanningSemantic by viewModel.isScanningSemantic.collectAsState()
+    var searchQuery by remember { mutableStateOf("") }
 
-    var showAddAccountDialog by remember { mutableStateOf(false) }
-    var newAccountEmail by remember { mutableStateOf("") }
+    // Handle connection result side-effects (Snackbar / Toasts)
+    LaunchedEffect(driveConnectionState) {
+        driveConnectionState?.let {
+            when (it) {
+                is com.example.data.repository.DriveConnectionResult.Cancelled -> {
+                    android.widget.Toast.makeText(context, "Connection cancelled", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                is com.example.data.repository.DriveConnectionResult.Failure -> {
+                    android.widget.Toast.makeText(context, "Connection failed: ${it.reason}", android.widget.Toast.LENGTH_LONG).show()
+                }
+                is com.example.data.repository.DriveConnectionResult.Success -> {
+                    android.widget.Toast.makeText(context, "Connected: ${it.email}", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -3552,319 +3562,218 @@ fun CloudManagerScreen(viewModel: MainViewModel) {
     ) {
         // Title
         Text(
-            text = "Google Drive Sim",
+            text = "Google Drive Cloud",
             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
             color = SaffronPrimary
         )
         Text(
-            text = "Simulated next-gen neural cloud manager",
+            text = "Secure Google Drive OAuth 2.0 Integration",
             style = MaterialTheme.typography.bodySmall,
             color = Color.Gray
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Multi-account Switcher Panel
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+        if (!isDriveConnected) {
+            // DISCONNECTED STATE: Show Connect UI
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
-                    Text("Connected Accounts", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
-                    IconButton(onClick = { showAddAccountDialog = true }) {
-                        Icon(Icons.Default.Add, contentDescription = "Add Account", tint = SaffronPrimary)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                if (cloudAccounts.isEmpty()) {
-                    Text("No connected cloud drives. Add one below.", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        cloudAccounts.forEach { account ->
-                            val isSelected = account == selectedAccount
-                            Box(
-                                modifier = Modifier
-                                    .background(
-                                        if (isSelected) SaffronPrimary else Color.Transparent,
-                                        RoundedCornerShape(16.dp)
-                                    )
-                                    .background(Color.Transparent)
-                                    .clickable { viewModel.selectCloudAccount(account) }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = account,
-                                        color = if (isSelected) Color.Black else Color.White,
-                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
-                                    )
-                                    if (isSelected) {
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Icon(
-                                            Icons.Default.Logout,
-                                            contentDescription = "Logout",
-                                            tint = Color.Black,
-                                            modifier = Modifier
-                                                .size(12.dp)
-                                                .clickable { viewModel.logoutCloudAccount(account) }
-                                        )
-                                    }
-                                }
+                    Icon(
+                        imageVector = Icons.Default.CloudQueue,
+                        contentDescription = "Cloud",
+                        tint = SaffronPrimary,
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Access Your Google Drive Files",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Log in securely using Google's official OAuth 2.0 flow. Smart Explorer does not view or store your password.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Button(
+                        onClick = {
+                            val activity = context as? android.app.Activity
+                            if (activity != null) {
+                                viewModel.connectDrive(activity)
+                            } else {
+                                android.widget.Toast.makeText(context, "Activity context not found", android.widget.Toast.LENGTH_SHORT).show()
                             }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(Icons.Default.Login, contentDescription = "Connect", tint = Color.Black)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Connect Google Drive", fontWeight = FontWeight.Bold, color = Color.Black)
                         }
                     }
                 }
             }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Semantic Scan Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f))
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.AutoAwesome, contentDescription = "AI", tint = SaffronPrimary)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "AI Semantic Scan Status",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = SaffronPrimary
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                if (isScanningSemantic) {
-                    Column {
-                        Text(
-                            text = scanStatus,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SaffronPrimary
+        } else {
+            // CONNECTED STATE: Show email display and files
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.AccountCircle,
+                            contentDescription = "Account",
+                            tint = SaffronPrimary,
+                            modifier = Modifier.size(36.dp)
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = scanProgress,
-                            modifier = Modifier.fillMaxWidth(),
-                            color = SaffronPrimary,
-                            trackColor = SaffronSecondary.copy(alpha = 0.2f)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Connected Account",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
+                            )
+                            Text(
+                                text = connectedEmail ?: "Unknown Account",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { viewModel.disconnectDrive() }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Logout,
+                            contentDescription = "Disconnect Drive",
+                            tint = Color.Red
                         )
                     }
-                } else {
-                    Column {
-                        if (scanMatchPercent > 0) {
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Real-Time Search Bar
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = {
+                    searchQuery = it
+                    viewModel.searchDriveFiles(it)
+                },
+                label = { Text("Search Drive files...") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = SaffronPrimary, focusedLabelColor = SaffronPrimary),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "${driveFiles.size} Files on Drive",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (driveFiles.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.InsertDriveFile, contentDescription = "Empty", tint = Color.Gray, modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = if (searchQuery.isNotEmpty()) "No matches found" else "No files in your Drive yet",
+                            color = Color.Gray
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(driveFiles) { file ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
+                              ) {
+                                Icon(
+                                    imageVector = if (file.isDirectory) {
+                                        Icons.Default.Folder
+                                    } else if (file.mimeType.contains("image")) {
+                                        Icons.Default.Image
+                                    } else if (file.mimeType.contains("video")) {
+                                        Icons.Default.PlayArrow
+                                    } else if (file.mimeType.contains("audio")) {
+                                        Icons.Default.MusicNote
+                                    } else {
+                                        Icons.Default.InsertDriveFile
+                                    },
+                                    contentDescription = file.mimeType,
+                                    tint = SaffronPrimary,
+                                    modifier = Modifier.size(28.dp)
+                                )
+
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = "Similarity Match: $scanMatchPercent%",
-                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = Color.Green
+                                        text = file.name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = "Cloud matches with local indexes verified.",
+                                        text = "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color.Gray
                                     )
                                 }
-                                Box(
-                                    modifier = Modifier
-                                        .background(Color.Green.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
-                                        .padding(8.dp)
-                                ) {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = "Verified", tint = Color.Green)
-                                }
-                            }
-                        } else {
-                            Text(
-                                text = "Run a cross-node scan to compare your local directory indexing vectors with the cloud node's schema.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.Gray
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Button(
-                            onClick = { viewModel.startSemanticScan() },
-                            colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Run AI Semantic Scan", fontWeight = FontWeight.Bold, color = Color.Black)
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Search Bar & Multi-Select Header
-        OutlinedTextField(
-            value = cloudSearchQuery,
-            onValueChange = { viewModel.updateCloudSearchQuery(it) },
-            label = { Text("Search cloud files...") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = SaffronPrimary, focusedLabelColor = SaffronPrimary),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "${cloudFiles.size} Cloud Files",
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-            )
-
-            Row {
-                if (selectedFiles.isNotEmpty()) {
-                    IconButton(onClick = { viewModel.deleteSelectedCloudFiles() }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete Selected", tint = Color.Red)
-                    }
-                }
-                TextButton(onClick = { viewModel.selectAllCloudFiles() }) {
-                    Text("Select All", color = SaffronPrimary)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Cloud File List
-        if (selectedAccount == null) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("Select or Add an Account above.", color = Color.Gray)
-            }
-        } else if (cloudFiles.isEmpty()) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("No files in this cloud directory.", color = Color.Gray)
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(cloudFiles) { file ->
-                    val isSelected = selectedFiles.contains(file.id)
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { viewModel.toggleCloudFileSelection(file.id) },
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isSelected) SaffronSecondary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = isSelected,
-                                onCheckedChange = { viewModel.toggleCloudFileSelection(file.id) },
-                                colors = CheckboxDefaults.colors(checkedColor = SaffronPrimary)
-                            )
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            Icon(
-                                imageVector = when (file.category) {
-                                    "Images" -> Icons.Default.Image
-                                    "Videos" -> Icons.Default.PlayArrow
-                                    "Audio" -> Icons.Default.MusicNote
-                                    else -> Icons.Default.InsertDriveFile
-                                },
-                                contentDescription = file.category,
-                                tint = SaffronPrimary,
-                                modifier = Modifier.size(28.dp)
-                            )
-
-                            Spacer(modifier = Modifier.width(12.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = file.name,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.Gray
-                                )
-                            }
-
-                            IconButton(onClick = { viewModel.deleteSingleCloudFile(file.id) }) {
-                                Icon(Icons.Default.Close, contentDescription = "Delete file", tint = Color.Gray)
                             }
                         }
                     }
                 }
             }
         }
-    }
-
-    // Add Account Dialog
-    if (showAddAccountDialog) {
-        AlertDialog(
-            onDismissRequest = { showAddAccountDialog = false },
-            title = { Text("Connect New Cloud Drive", color = SaffronPrimary) },
-            text = {
-                Column {
-                    Text("Enter the email address of the drive you wish to connect:", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = newAccountEmail,
-                        onValueChange = { newAccountEmail = it },
-                        label = { Text("Account Email") },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = SaffronPrimary, focusedLabelColor = SaffronPrimary)
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newAccountEmail.trim().isNotEmpty()) {
-                            viewModel.addCloudAccount(newAccountEmail.trim())
-                            newAccountEmail = ""
-                            showAddAccountDialog = false
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = SaffronPrimary)
-                ) {
-                    Text("Connect", color = Color.Black)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddAccountDialog = false }) {
-                    Text("Cancel", color = SaffronPrimary)
-                }
-            }
-        )
     }
 }
 

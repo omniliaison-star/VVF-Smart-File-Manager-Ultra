@@ -434,6 +434,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _cloudSearchQuery = MutableStateFlow("")
     val cloudSearchQuery: StateFlow<String> = _cloudSearchQuery.asStateFlow()
 
+    // Real Google Drive OAuth Integration State
+    private val driveRepository = com.example.data.repository.DriveRepository(application)
+
+    private val _driveFiles = MutableStateFlow<List<FileItem>>(emptyList())
+    val driveFiles: StateFlow<List<FileItem>> = _driveFiles.asStateFlow()
+
+    private val _isDriveConnected = MutableStateFlow(driveRepository.isConnected(application))
+    val isDriveConnected: StateFlow<Boolean> = _isDriveConnected.asStateFlow()
+
+    private val _driveConnectionState = MutableStateFlow<com.example.data.repository.DriveConnectionResult?>(null)
+    val driveConnectionState: StateFlow<com.example.data.repository.DriveConnectionResult?> = _driveConnectionState.asStateFlow()
+
+    val driveConnectedEmail: String?
+        get() = driveRepository.getConnectedEmailDisplay(getApplication())
+
     // Semantic Scan State
     private val _semanticScanProgress = MutableStateFlow(0f)
     val semanticScanProgress: StateFlow<Float> = _semanticScanProgress.asStateFlow()
@@ -528,7 +543,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         triggerBackgroundScanning()
         loadChatMessages()
         loadCachedDuplicates()
-        _selectedCloudAccount.value?.let { generateSimulatedCloudFiles(it) }
+        if (_isDriveConnected.value) {
+            loadDriveFiles()
+        }
 
         // Periodic background update mechanism for Storage Dashboard (every 30 seconds)
         viewModelScope.launch {
@@ -552,7 +569,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is Screen.Vault -> loadVault()
             is Screen.Duplicates -> scanForDuplicates()
             is Screen.JunkCleaner -> scanForJunk()
-            is Screen.CloudManager -> _selectedCloudAccount.value?.let { generateSimulatedCloudFiles(it) }
+            is Screen.CloudManager -> {
+                if (_isDriveConnected.value) {
+                    loadDriveFiles()
+                }
+            }
             else -> {}
         }
         refreshStorageInfo()
@@ -1194,5 +1215,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isHighThinkingEnabled.value = enabled
         val prefs = getApplication<Application>().getSharedPreferences("vvf_api_prefs", android.content.Context.MODE_PRIVATE)
         prefs.edit().putBoolean("gemini_high_thinking", enabled).apply()
+    }
+
+    // Google Drive Integration Methods
+    fun connectDrive(activity: android.app.Activity) {
+        viewModelScope.launch {
+            _driveConnectionState.value = null
+            val result = driveRepository.connectDrive(activity)
+            _driveConnectionState.value = result
+            if (result is com.example.data.repository.DriveConnectionResult.Success) {
+                _isDriveConnected.value = true
+                loadDriveFiles()
+            }
+        }
+    }
+
+    fun onDriveConnected() {
+        _isDriveConnected.value = true
+        loadDriveFiles()
+    }
+
+    fun loadDriveFiles() {
+        viewModelScope.launch {
+            val files = driveRepository.listDriveFiles(getApplication())
+            _driveFiles.value = files
+        }
+    }
+
+    fun disconnectDrive() {
+        driveRepository.disconnectDrive(getApplication())
+        _isDriveConnected.value = false
+        _driveFiles.value = emptyList()
+        _driveConnectionState.value = null
+    }
+
+    fun searchDriveFiles(query: String) {
+        viewModelScope.launch {
+            val files = driveRepository.searchDriveFiles(query, getApplication())
+            _driveFiles.value = files
+        }
     }
 }
