@@ -211,6 +211,21 @@ class DriveRepository(private val context: Context) {
         }
     }
 
+    suspend fun downloadDriveFile(fileId: String, context: Context, outputFile: java.io.File): Boolean = withContext(Dispatchers.IO) {
+        if (!isConnected(context)) return@withContext false
+        val service = getDriveService(context) ?: return@withContext false
+        try {
+            outputFile.parentFile?.mkdirs()
+            outputFile.outputStream().use { outputStream ->
+                service.files().get(fileId).executeMediaAndDownloadTo(outputStream)
+            }
+            true
+        } catch (e: Exception) {
+            Log.e("DriveRepository", "Error downloading Drive file $fileId: ${e.message}", e)
+            false
+        }
+    }
+
     fun sha256(input: String): String {
         return try {
             val digest = MessageDigest.getInstance("SHA-256")

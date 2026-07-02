@@ -98,6 +98,17 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Pre-create WebView cache directories to prevent Chromium E/chromium opendir errors
+        try {
+            val cacheDir = applicationContext.cacheDir
+            val wasmDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm")
+            val jsDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/js")
+            if (!wasmDir.exists()) wasmDir.mkdirs()
+            if (!jsDir.exists()) jsDir.mkdirs()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         com.example.data.repository.DriveSignInCoordinator.onLaunchSignInIntent = { intent ->
             googleSignInLauncher.launch(intent)
         }

@@ -55,15 +55,6 @@ sealed class SummarizationState {
     data class Error(val msg: String) : SummarizationState()
 }
 
-data class CloudFile(
-    val id: String,
-    val name: String,
-    val size: Long,
-    val mimeType: String,
-    val lastModified: Long,
-    val category: String = "Other"
-)
-
 enum class SortBy {
     NAME, SIZE, DATE, TYPE
 }
@@ -418,22 +409,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _storageTotalSpace = MutableStateFlow(0L)
     val storageTotalSpace: StateFlow<Long> = _storageTotalSpace.asStateFlow()
 
-    // Google Drive / Cloud Sim State
-    private val _cloudAccounts = MutableStateFlow<List<String>>(listOf("personal.cloud@gmail.com", "work.drive@corporate.com"))
-    val cloudAccounts: StateFlow<List<String>> = _cloudAccounts.asStateFlow()
-
-    private val _selectedCloudAccount = MutableStateFlow<String?>("personal.cloud@gmail.com")
-    val selectedCloudAccount: StateFlow<String?> = _selectedCloudAccount.asStateFlow()
-
-    private val _cloudFiles = MutableStateFlow<List<CloudFile>>(emptyList())
-    val cloudFiles: StateFlow<List<CloudFile>> = _cloudFiles.asStateFlow()
-
-    private val _selectedCloudFiles = MutableStateFlow<Set<String>>(emptySet())
-    val selectedCloudFiles: StateFlow<Set<String>> = _selectedCloudFiles.asStateFlow()
-
-    private val _cloudSearchQuery = MutableStateFlow("")
-    val cloudSearchQuery: StateFlow<String> = _cloudSearchQuery.asStateFlow()
-
     // Real Google Drive OAuth Integration State
     private val driveRepository = com.example.data.repository.DriveRepository(application)
 
@@ -448,6 +423,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val driveConnectedEmail: String?
         get() = driveRepository.getConnectedEmailDisplay(getApplication())
+
+    private val offlineCacheDir = java.io.File(application.cacheDir, "drive_offline_cache")
+
+    private val _offlineFileIds = MutableStateFlow<Set<String>>(emptySet())
+    val offlineFileIds: StateFlow<Set<String>> = _offlineFileIds.asStateFlow()
+
+    private val _downloadingFileIds = MutableStateFlow<Set<String>>(emptySet())
+    val downloadingFileIds: StateFlow<Set<String>> = _downloadingFileIds.asStateFlow()
 
     // Semantic Scan State
     private val _semanticScanProgress = MutableStateFlow(0f)
@@ -543,6 +526,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         triggerBackgroundScanning()
         loadChatMessages()
         loadCachedDuplicates()
+        loadOfflineFileIds()
         if (_isDriveConnected.value) {
             loadDriveFiles()
         }
@@ -1064,84 +1048,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- CLOUD MANAGER METHODS ---
-    fun selectCloudAccount(account: String) {
-        _selectedCloudAccount.value = account
-        _selectedCloudFiles.value = emptySet()
-        generateSimulatedCloudFiles(account)
-    }
 
-    fun addCloudAccount(account: String) {
-        if (account.trim().isNotEmpty() && !_cloudAccounts.value.contains(account.trim())) {
-            _cloudAccounts.value = _cloudAccounts.value + account.trim()
-            selectCloudAccount(account.trim())
-        }
-    }
-
-    fun logoutCloudAccount(account: String) {
-        _cloudAccounts.value = _cloudAccounts.value.filter { it != account }
-        if (_selectedCloudAccount.value == account) {
-            _selectedCloudAccount.value = _cloudAccounts.value.firstOrNull()
-            _selectedCloudAccount.value?.let { generateSimulatedCloudFiles(it) } ?: run { _cloudFiles.value = emptyList() }
-        }
-    }
-
-    fun toggleCloudFileSelection(id: String) {
-        val currentSet = _selectedCloudFiles.value.toMutableSet()
-        if (currentSet.contains(id)) {
-            currentSet.remove(id)
-        } else {
-            currentSet.add(id)
-        }
-        _selectedCloudFiles.value = currentSet
-    }
-
-    fun selectAllCloudFiles() {
-        val allIds = filteredCloudFiles().map { it.id }.toSet()
-        _selectedCloudFiles.value = allIds
-    }
-
-    fun deleteSelectedCloudFiles() {
-        val selected = _selectedCloudFiles.value
-        _cloudFiles.value = _cloudFiles.value.filter { !selected.contains(it.id) }
-        _selectedCloudFiles.value = emptySet()
-    }
-
-    fun deleteSingleCloudFile(id: String) {
-        _cloudFiles.value = _cloudFiles.value.filter { it.id != id }
-        _selectedCloudFiles.value = _selectedCloudFiles.value.filter { it != id }.toSet()
-    }
-
-    fun updateCloudSearchQuery(query: String) {
-        _cloudSearchQuery.value = query
-    }
-
-    fun filteredCloudFiles(): List<CloudFile> {
-        val query = _cloudSearchQuery.value.trim()
-        if (query.isEmpty()) return _cloudFiles.value
-        return _cloudFiles.value.filter { it.name.contains(query, ignoreCase = true) }
-    }
-
-    fun generateSimulatedCloudFiles(account: String) {
-        val isWork = account.contains("work") || account.contains("corporate")
-        _cloudFiles.value = if (isWork) {
-            listOf(
-                CloudFile("c1", "Q3 Financial Performance.xlsx", 24 * 1024 * 1024L, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", System.currentTimeMillis() - 48000000, "Documents"),
-                CloudFile("c2", "AI Deep Learning Strategy 2026.pdf", 8 * 1024 * 1024L, "application/pdf", System.currentTimeMillis() - 86000000, "Documents"),
-                CloudFile("c3", "Quantum Computing Project Spec.txt", 45000L, "text/plain", System.currentTimeMillis() - 150000000, "Documents"),
-                CloudFile("c4", "Enterprise Architecture Diagram.png", 3 * 1024 * 1024L, "image/png", System.currentTimeMillis() - 320000000, "Images"),
-                CloudFile("c5", "Corporate All Hands Audio.mp3", 42 * 1024 * 1024L, "audio/mpeg", System.currentTimeMillis() - 600000000, "Audio")
-            )
-        } else {
-            listOf(
-                CloudFile("c1", "Family Vacation Photos.zip", 450 * 1024 * 1024L, "application/zip", System.currentTimeMillis() - 120000000, "Archives"),
-                CloudFile("c2", "Guitar Solo Practice.wav", 18 * 1024 * 1024L, "audio/wav", System.currentTimeMillis() - 320000000, "Audio"),
-                CloudFile("c3", "My Resume.docx", 120000L, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", System.currentTimeMillis() - 500000000, "Documents"),
-                CloudFile("c4", "Cute Cat Video.mp4", 85 * 1024 * 1024L, "video/mp4", System.currentTimeMillis() - 900000000, "Videos"),
-                CloudFile("c5", "Groceries Budget list.xlsx", 85000L, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", System.currentTimeMillis() - 12000000, "Documents")
-            )
-        }
-    }
 
     fun startSemanticScan() {
         viewModelScope.launch {
@@ -1253,6 +1160,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val files = driveRepository.searchDriveFiles(query, getApplication())
             _driveFiles.value = files
+        }
+    }
+
+    fun loadOfflineFileIds() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (!offlineCacheDir.exists()) {
+                    offlineCacheDir.mkdirs()
+                }
+                val files = offlineCacheDir.listFiles()
+                val ids = files?.map { it.name }?.toSet() ?: emptySet()
+                _offlineFileIds.value = ids
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error loading offline file IDs: ${e.message}", e)
+            }
+        }
+    }
+
+    fun toggleOfflineStatus(file: FileItem) {
+        val fileId = file.id
+        if (_offlineFileIds.value.contains(fileId)) {
+            // Remove offline copy
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val localFile = java.io.File(offlineCacheDir, fileId)
+                    if (localFile.exists()) {
+                        localFile.delete()
+                    }
+                    _offlineFileIds.value = _offlineFileIds.value - fileId
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(getApplication(), "Removed offline copy of ${file.name}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Error removing offline file: ${e.message}", e)
+                }
+            }
+        } else {
+            // Download to keep offline
+            _downloadingFileIds.value = _downloadingFileIds.value + fileId
+            viewModelScope.launch {
+                val localFile = java.io.File(offlineCacheDir, fileId)
+                val success = driveRepository.downloadDriveFile(fileId, getApplication(), localFile)
+                _downloadingFileIds.value = _downloadingFileIds.value - fileId
+                if (success) {
+                    _offlineFileIds.value = _offlineFileIds.value + fileId
+                    android.widget.Toast.makeText(getApplication(), "Downloaded ${file.name} for offline use", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    android.widget.Toast.makeText(getApplication(), "Failed to download ${file.name}", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 }

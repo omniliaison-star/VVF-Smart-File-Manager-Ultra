@@ -3535,6 +3535,8 @@ fun CloudManagerScreen(viewModel: MainViewModel) {
     val driveFiles by viewModel.driveFiles.collectAsState()
     val driveConnectionState by viewModel.driveConnectionState.collectAsState()
     val connectedEmail = viewModel.driveConnectedEmail
+    val offlineFileIds by viewModel.offlineFileIds.collectAsState()
+    val downloadingFileIds by viewModel.downloadingFileIds.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
 
@@ -3756,17 +3758,68 @@ fun CloudManagerScreen(viewModel: MainViewModel) {
                                 Spacer(modifier = Modifier.width(12.dp))
 
                                 Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = file.name,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        if (offlineFileIds.contains(file.id)) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Icon(
+                                                imageVector = Icons.Default.CheckCircle,
+                                                contentDescription = "Available offline",
+                                                tint = Color(0xFF4CAF50),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
                                     Text(
-                                        text = file.name,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}",
+                                        text = if (offlineFileIds.contains(file.id)) {
+                                            "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)} • Offline"
+                                        } else {
+                                            "${formatFileSize(file.size)} • ${formatTimestamp(file.lastModified)}"
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray
+                                        color = if (offlineFileIds.contains(file.id)) Color(0xFF4CAF50) else Color.Gray
                                     )
+                                }
+
+                                if (!file.isDirectory) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    when {
+                                        downloadingFileIds.contains(file.id) -> {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(24.dp),
+                                                strokeWidth = 2.dp,
+                                                color = SaffronPrimary
+                                            )
+                                        }
+                                        offlineFileIds.contains(file.id) -> {
+                                            IconButton(
+                                                onClick = { viewModel.toggleOfflineStatus(file) }
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.CloudDone,
+                                                    contentDescription = "Remove offline copy",
+                                                    tint = Color(0xFF4CAF50)
+                                                )
+                                            }
+                                        }
+                                        else -> {
+                                            IconButton(
+                                                onClick = { viewModel.toggleOfflineStatus(file) }
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.CloudQueue,
+                                                    contentDescription = "Keep offline",
+                                                    tint = Color.Gray
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
