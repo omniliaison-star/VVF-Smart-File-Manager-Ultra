@@ -18,6 +18,9 @@ import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
@@ -231,6 +234,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _vaultLastUsedAuth.value = method
     }
 
+    private val _vaultAutoLockMinutes = MutableStateFlow(5)
+    val vaultAutoLockMinutes: StateFlow<Int> = _vaultAutoLockMinutes.asStateFlow()
+
+    fun setVaultAutoLockMinutes(minutes: Int) {
+        vaultRepository.setAutoLockMinutes(minutes)
+        _vaultAutoLockMinutes.value = minutes
+    }
+
+    private var lastVaultInteraction: Long = System.currentTimeMillis()
+    private var autoLockJob: Job? = null
+
+    fun updateVaultInteraction() {
+        lastVaultInteraction = System.currentTimeMillis()
+    }
+
+    private fun startVaultAutoLockTimer() {
+        autoLockJob?.cancel()
+        autoLockJob = viewModelScope.launch {
+            while (true) {
+                delay(10000) // check every 10 seconds
+                if (_isVaultAuthenticated.value) {
+                    val limitMinutes = _vaultAutoLockMinutes.value
+                    if (limitMinutes >= 0) { // -1 means Never
+                        val limitMs = limitMinutes * 60 * 1000L
+                        val elapsed = System.currentTimeMillis() - lastVaultInteraction
+                        // For "Immediately" (0 min), use a 10-second inactivity safeguard so user can complete unlock
+                        val thresholdMs = if (limitMinutes == 0) 10000L else limitMs
+                        if (elapsed >= thresholdMs) {
+                            lockVault()
+                        }
+                    }
+                } else {
+                    break
+                }
+            }
+        }
+    }
+
     private val _selectedCategoryFilter = MutableStateFlow<String?>(null)
     val selectedCategoryFilter: StateFlow<String?> = _selectedCategoryFilter.asStateFlow()
 
@@ -415,6 +456,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _driveFiles = MutableStateFlow<List<FileItem>>(emptyList())
     val driveFiles: StateFlow<List<FileItem>> = _driveFiles.asStateFlow()
 
+    private val _isDriveOfflineMode = MutableStateFlow(false)
+    val isDriveOfflineMode: StateFlow<Boolean> = _isDriveOfflineMode.asStateFlow()
+
+    private val _driveStorageInfo = MutableStateFlow<com.example.data.repository.DriveStorageInfo?>(null)
+    val driveStorageInfo: StateFlow<com.example.data.repository.DriveStorageInfo?> = _driveStorageInfo.asStateFlow()
+
     private val _isDriveConnected = MutableStateFlow(driveRepository.isConnected(application))
     val isDriveConnected: StateFlow<Boolean> = _isDriveConnected.asStateFlow()
 
@@ -512,6 +559,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Initialize last used authentication method
         _vaultLastUsedAuth.value = vaultRepository.getLastUsedAuthMethod()
+        _vaultAutoLockMinutes.value = vaultRepository.getAutoLockMinutes()
+
+        // Observe Vault authentication status to manage auto-lock timer
+        viewModelScope.launch {
+            isVaultAuthenticated.collect { authenticated ->
+                if (authenticated) {
+                    updateVaultInteraction()
+                    startVaultAutoLockTimer()
+                } else {
+                    autoLockJob?.cancel()
+                }
+            }
+        }
 
         // Initialize SD Card status
         val sdCardUri = fileRepository.getSdCardUri(application)
@@ -1144,16 +1204,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadDriveFiles() {
         viewModelScope.launch {
-            val files = driveRepository.listDriveFiles(getApplication())
-            _driveFiles.value = files
+            // 1. Emit cached data first if available
+            val cached = driveRepository.getCachedDriveFiles(getApplication())
+            if (cached.isNotEmpty()) {
+                _driveFiles.value = cached
+                _isDriveOfflineMode.value = true
+            }
+
+            // 2. Perform background live refresh
+            try {
+                val live = driveRepository.listDriveFiles(getApplication())
+                if (live.isNotEmpty() || driveRepository.isConnected(getApplication())) {
+                    _driveFiles.value = live
+                    _isDriveOfflineMode.value = false
+                } else {
+                    _isDriveOfflineMode.value = cached.isNotEmpty()
+                }
+            } catch (e: Exception) {
+                _isDriveOfflineMode.value = cached.isNotEmpty()
+            }
+            
+            // 3. Fetch storage usage
+            loadDriveStorageInfo()
+        }
+    }
+
+    fun loadDriveStorageInfo() {
+        viewModelScope.launch {
+            _driveStorageInfo.value = driveRepository.getStorageUsage(getApplication())
         }
     }
 
     fun disconnectDrive() {
         driveRepository.disconnectDrive(getApplication())
         _isDriveConnected.value = false
+        _isDriveOfflineMode.value = false
         _driveFiles.value = emptyList()
         _driveConnectionState.value = null
+        viewModelScope.launch {
+            try {
+                AppDatabase.getDatabase(getApplication()).driveFileDao().clearAllDriveFiles()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error clearing drive cache: ${e.message}")
+            }
+        }
     }
 
     fun searchDriveFiles(query: String) {

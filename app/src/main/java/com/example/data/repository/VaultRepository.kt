@@ -25,6 +25,14 @@ class VaultRepository(
 ) {
     private val sharedPrefs = context.getSharedPreferences("vvf_vault_prefs", Context.MODE_PRIVATE)
 
+    fun getAutoLockMinutes(): Int {
+        return sharedPrefs.getInt("vault_auto_lock_minutes", 5)
+    }
+
+    fun setAutoLockMinutes(minutes: Int) {
+        sharedPrefs.edit().putInt("vault_auto_lock_minutes", minutes).apply()
+    }
+
     private fun generateSalt(): String {
         return try {
             val random = java.security.SecureRandom()

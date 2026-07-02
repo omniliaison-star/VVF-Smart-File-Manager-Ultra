@@ -8,6 +8,8 @@ import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 import com.example.data.model.FileItem
+import com.example.data.database.AppDatabase
+import com.example.data.database.DbDriveFile
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
@@ -45,6 +47,11 @@ object DriveSignInCoordinator {
         pendingResult = null
     }
 }
+
+data class DriveStorageInfo(
+    val limitBytes: Long?,
+    val usageBytes: Long
+)
 
 class DriveRepository(private val context: Context) {
 
@@ -121,7 +128,7 @@ class DriveRepository(private val context: Context) {
                 .execute()
 
             val files = result.getFiles() ?: emptyList()
-            files.map { file ->
+            val mappedList = files.map { file ->
                 val size = file.getSize() ?: 0L
                 val modifiedTime = file.getModifiedTime()?.getValue() ?: 0L
                 val mime = file.getMimeType() ?: ""
@@ -137,6 +144,28 @@ class DriveRepository(private val context: Context) {
                     isVaultItem = false
                 )
             }
+
+            // Save to local cache in Room
+            try {
+                val db = AppDatabase.getDatabase(context)
+                val dbFiles = mappedList.map { item ->
+                    DbDriveFile(
+                        id = item.id,
+                        name = item.name,
+                        mimeType = item.mimeType,
+                        size = item.size,
+                        lastModified = item.lastModified,
+                        isDirectory = item.isDirectory,
+                        path = item.path
+                    )
+                }
+                db.driveFileDao().clearAllDriveFiles()
+                db.driveFileDao().upsertDriveFiles(dbFiles)
+            } catch (ex: Exception) {
+                Log.e("DriveRepository", "Failed to cache drive files to Room: ${ex.message}", ex)
+            }
+
+            mappedList
         } catch (e: GoogleJsonResponseException) {
             Log.e("DriveRepository", "Google JSON API error: ${e.statusCode} - ${e.message}", e)
             if (e.statusCode == 401 || e.statusCode == 403) {
@@ -147,6 +176,28 @@ class DriveRepository(private val context: Context) {
             emptyList()
         } catch (e: Exception) {
             Log.e("DriveRepository", "Error listing Drive files: ${e.message}", e)
+            emptyList()
+        }
+    }
+
+    suspend fun getCachedDriveFiles(context: Context): List<FileItem> = withContext(Dispatchers.IO) {
+        try {
+            val db = AppDatabase.getDatabase(context)
+            val dbFiles = db.driveFileDao().getAllDriveFiles()
+            dbFiles.map { file ->
+                FileItem(
+                    id = file.id,
+                    name = file.name,
+                    path = file.path,
+                    size = file.size,
+                    isDirectory = file.isDirectory,
+                    mimeType = file.mimeType,
+                    lastModified = file.lastModified,
+                    isVaultItem = false
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("DriveRepository", "Error reading cached Drive files: ${e.message}", e)
             emptyList()
         }
     }
@@ -223,6 +274,28 @@ class DriveRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e("DriveRepository", "Error downloading Drive file $fileId: ${e.message}", e)
             false
+        }
+    }
+
+    suspend fun getStorageUsage(context: Context): DriveStorageInfo? = withContext(Dispatchers.IO) {
+        if (!isConnected(context)) return@withContext null
+        val service = getDriveService(context) ?: return@withContext null
+        try {
+            val about = service.about().get().setFields("storageQuota").execute()
+            val quota = about.getStorageQuota()
+            if (quota != null) {
+                val limit = quota.getLimit()
+                val usage = quota.getUsage() ?: 0L
+                DriveStorageInfo(
+                    limitBytes = if (limit != null && limit > 0) limit else null,
+                    usageBytes = usage
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e("DriveRepository", "Error fetching storage usage: ${e.message}", e)
+            null
         }
     }
 

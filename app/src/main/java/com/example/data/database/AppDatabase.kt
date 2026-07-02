@@ -13,9 +13,10 @@ import androidx.room.RoomDatabase
         FileEntity::class,
         CategoryEntity::class,
         SecureStateEntity::class,
-        ChatMessageEntity::class
+        ChatMessageEntity::class,
+        DbDriveFile::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -26,6 +27,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun categoryEntityDao(): CategoryEntityDao
     abstract fun secureStateEntityDao(): SecureStateEntityDao
     abstract fun chatMessageEntityDao(): ChatMessageEntityDao
+    abstract fun driveFileDao(): DriveFileDao
 
     companion object {
         @Volatile

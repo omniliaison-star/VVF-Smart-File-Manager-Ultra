@@ -69,3 +69,14 @@ data class ChatMessageEntity(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+@Entity(tableName = "drive_files")
+data class DbDriveFile(
+    @PrimaryKey val id: String,
+    val name: String,
+    val mimeType: String,
+    val size: Long,
+    val lastModified: Long,
+    val isDirectory: Boolean,
+    val path: String
+)
+

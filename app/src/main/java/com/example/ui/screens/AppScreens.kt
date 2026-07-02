@@ -5,6 +5,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
@@ -24,6 +25,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -79,6 +81,240 @@ fun formatFileSize(bytes: Long): String {
 fun formatTimestamp(ms: Long): String {
     val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
     return sdf.format(Date(ms))
+}
+
+// --- THUMBNAIL CACHING AND UTILITIES ---
+object ThumbnailCache {
+    private val cache = java.util.Collections.synchronizedMap(
+        object : java.util.LinkedHashMap<String, Bitmap>(50, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
+                return size > 150
+            }
+        }
+    )
+
+    fun get(key: String): Bitmap? = cache[key]
+    fun put(key: String, value: Bitmap) {
+        cache[key] = value
+    }
+}
+
+fun loadPdfFirstPage(context: android.content.Context, fileUriOrPath: String): Bitmap? {
+    var pfd: android.os.ParcelFileDescriptor? = null
+    var renderer: android.graphics.pdf.PdfRenderer? = null
+    var page: android.graphics.pdf.PdfRenderer.Page? = null
+    try {
+        pfd = if (fileUriOrPath.startsWith("content://")) {
+            context.contentResolver.openFileDescriptor(android.net.Uri.parse(fileUriOrPath), "r")
+        } else {
+            android.os.ParcelFileDescriptor.open(File(fileUriOrPath), android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+        }
+        if (pfd != null) {
+            renderer = android.graphics.pdf.PdfRenderer(pfd)
+            if (renderer.pageCount > 0) {
+                page = renderer.openPage(0)
+                val bitmap = Bitmap.createBitmap(120, 160, Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bitmap)
+                canvas.drawColor(android.graphics.Color.WHITE)
+                page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                return bitmap
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    } finally {
+        try { page?.close() } catch (e: Exception) {}
+        try { renderer?.close() } catch (e: Exception) {}
+        try { pfd?.close() } catch (e: Exception) {}
+    }
+    return null
+}
+
+fun loadVideoFrame(context: android.content.Context, fileUriOrPath: String): Bitmap? {
+    val retriever = android.media.MediaMetadataRetriever()
+    try {
+        if (fileUriOrPath.startsWith("content://")) {
+            context.contentResolver.openFileDescriptor(android.net.Uri.parse(fileUriOrPath), "r")?.use { pfd ->
+                retriever.setDataSource(pfd.fileDescriptor)
+            }
+        } else {
+            retriever.setDataSource(fileUriOrPath)
+        }
+        return retriever.getFrameAtTime(1000000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            ?: retriever.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+    } catch (e: Exception) {
+        e.printStackTrace()
+        try {
+            if (!fileUriOrPath.startsWith("content://")) {
+                return android.media.ThumbnailUtils.createVideoThumbnail(
+                    fileUriOrPath,
+                    android.provider.MediaStore.Images.Thumbnails.MINI_KIND
+                )
+            }
+        } catch (ex: Exception) {
+            ex.printStackTrace()
+        }
+    } finally {
+        try { retriever.release() } catch (e: Exception) {}
+    }
+    return null
+}
+
+@Composable
+fun FilePreviewIcon(
+    file: FileItem,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var bitmap by remember(file.path) { mutableStateOf<Bitmap?>(null) }
+    var isLoading by remember(file.path) { mutableStateOf(false) }
+
+    val mime = file.mimeType.lowercase()
+    val isImage = mime.contains("image") || file.name.endsWith(".jpg", ignoreCase = true) || file.name.endsWith(".jpeg", ignoreCase = true) || file.name.endsWith(".png", ignoreCase = true) || file.name.endsWith(".webp", ignoreCase = true)
+    val isVideo = mime.contains("video") || file.name.endsWith(".mp4", ignoreCase = true) || file.name.endsWith(".mkv", ignoreCase = true) || file.name.endsWith(".3gp", ignoreCase = true)
+    val isPdf = file.name.endsWith(".pdf", ignoreCase = true)
+
+    if (isImage) {
+        val uri = if (file.path.startsWith("content://") || file.path.startsWith("file://")) {
+            android.net.Uri.parse(file.path)
+        } else {
+            java.io.File(file.path)
+        }
+        AsyncImage(
+            model = ImageRequest.Builder(context)
+                .data(uri)
+                .crossfade(true)
+                .size(160)
+                .build(),
+            contentDescription = file.name,
+            modifier = modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentScale = ContentScale.Crop
+        )
+    } else if (isVideo) {
+        LaunchedEffect(file.path) {
+            isLoading = true
+            withContext(Dispatchers.IO) {
+                try {
+                    val cached = ThumbnailCache.get(file.path)
+                    if (cached != null) {
+                        bitmap = cached
+                    } else {
+                        val thumb = loadVideoFrame(context, file.path)
+                        if (thumb != null) {
+                            ThumbnailCache.put(file.path, thumb)
+                            bitmap = thumb
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    isLoading = false
+                }
+            }
+        }
+
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = file.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = "Video",
+                        tint = Color.White,
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
+            } else {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Video",
+                    tint = SaffronPrimary,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+    } else if (isPdf) {
+        LaunchedEffect(file.path) {
+            isLoading = true
+            withContext(Dispatchers.IO) {
+                try {
+                    val cached = ThumbnailCache.get(file.path)
+                    if (cached != null) {
+                        bitmap = cached
+                    } else {
+                        val thumb = loadPdfFirstPage(context, file.path)
+                        if (thumb != null) {
+                            ThumbnailCache.put(file.path, thumb)
+                            bitmap = thumb
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    isLoading = false
+                }
+            }
+        }
+
+        Box(
+            modifier = modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = file.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .background(Color.Red, RoundedCornerShape(topStart = 4.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                ) {
+                    Text(
+                        text = "PDF",
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                    )
+                }
+            } else {
+                Icon(
+                    imageVector = Icons.Default.PictureAsPdf,
+                    contentDescription = "PDF",
+                    tint = Color.Red,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+    } else {
+        Icon(
+            imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+            contentDescription = if (file.isDirectory) "Folder" else "File",
+            tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+            modifier = modifier
+        )
+    }
 }
 
 // --- CORE APP LAYOUT WRAPPER ---
@@ -1304,10 +1540,8 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                                     .padding(horizontal = 16.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
-                                    contentDescription = if (file.isDirectory) "Folder" else "File",
-                                    tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                FilePreviewIcon(
+                                    file = file,
                                     modifier = Modifier.size(40.dp)
                                 )
                                 Spacer(modifier = Modifier.width(16.dp))
@@ -1370,10 +1604,8 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         verticalArrangement = Arrangement.Center
                                     ) {
-                                        Icon(
-                                            imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
-                                            contentDescription = if (file.isDirectory) "Folder" else "File",
-                                            tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                        FilePreviewIcon(
+                                            file = file,
                                             modifier = Modifier.size(48.dp)
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
@@ -1448,10 +1680,8 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                                     .padding(horizontal = 16.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
-                                    contentDescription = if (file.isDirectory) "Folder" else "File",
-                                    tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                FilePreviewIcon(
+                                    file = file,
                                     modifier = Modifier.size(40.dp)
                                 )
                                 Spacer(modifier = Modifier.width(16.dp))
@@ -1517,10 +1747,8 @@ fun ExplorerScreen(viewModel: MainViewModel) {
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         verticalArrangement = Arrangement.Center
                                     ) {
-                                        Icon(
-                                            imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.Default.Info,
-                                            contentDescription = if (file.isDirectory) "Folder" else "File",
-                                            tint = if (file.isDirectory) SaffronSecondary else Color.Gray,
+                                        FilePreviewIcon(
+                                            file = file,
                                             modifier = Modifier.size(48.dp)
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
@@ -2765,7 +2993,18 @@ fun VaultScreen(viewModel: MainViewModel) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent()
+                        viewModel.updateVaultInteraction()
+                    }
+                }
+            }
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -3194,30 +3433,51 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
                                 Box(
                                     modifier = Modifier
                                         .aspectRatio(1f)
+                                        .clip(RoundedCornerShape(8.dp))
                                         .background(SaffronSecondary.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
                                         .clickable {
                                             activeSlideshowIndex = index
                                             isSlideshowPlaying = true
                                         },
-                                    contentAlignment = Alignment.Center
+                                    contentAlignment = Alignment.BottomCenter
                                 ) {
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)) {
-                                        Icon(Icons.Default.Info, contentDescription = "Image", tint = SaffronPrimary)
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            img.name,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        if (img.width != null && img.height != null) {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(LocalContext.current)
+                                            .data(File(img.path))
+                                            .crossfade(true)
+                                            .size(240)
+                                            .build(),
+                                        contentDescription = img.name,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(
+                                                Brush.verticalGradient(
+                                                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))
+                                                )
+                                            )
+                                            .padding(4.dp)
+                                    ) {
+                                        Column {
                                             Text(
-                                                "${img.width}x${img.height}",
-                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                                color = Color.Gray,
+                                                img.name,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                                                color = Color.White,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
                                             )
+                                            if (img.width != null && img.height != null) {
+                                                Text(
+                                                    "${img.width}x${img.height}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                                                    color = Color.LightGray,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -3240,7 +3500,7 @@ fun MediaCenterScreen(viewModel: MainViewModel) {
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                             ) {
                                 Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = SaffronPrimary)
+                                    FilePreviewIcon(file = vid, modifier = Modifier.size(56.dp))
                                     Spacer(modifier = Modifier.width(16.dp))
                                     Column {
                                         Text(vid.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -3459,6 +3719,72 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
+        // Secure Vault settings
+        val autoLockMinutes by viewModel.vaultAutoLockMinutes.collectAsState()
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "Secure Vault Configuration",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Configure inactivity auto-lock timeout for your encrypted safe folder.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "Auto-Lock Timeout",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = SaffronPrimary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                val options = listOf(
+                    Triple("Immediately", 0, "Immediately"),
+                    Triple("1 min", 1, "1 min"),
+                    Triple("5 min", 5, "5 min"),
+                    Triple("Never", -1, "Never")
+                )
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    options.forEach { (label, value, tag) ->
+                        val selected = autoLockMinutes == value
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (selected) SaffronPrimary.copy(alpha = 0.15f) else Color.Transparent)
+                                .border(
+                                    width = 1.dp,
+                                    color = if (selected) SaffronPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .clickable { viewModel.setVaultAutoLockMinutes(value) }
+                                .padding(vertical = 8.dp)
+                                .testTag("vault_autolock_chip_$tag"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selected) SaffronPrimary else MaterialTheme.colorScheme.onSurface
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Storage Scan Actions
         Card(
             modifier = Modifier.fillMaxWidth()
@@ -3554,6 +3880,12 @@ fun CloudManagerScreen(viewModel: MainViewModel) {
                     android.widget.Toast.makeText(context, "Connected: ${it.email}", android.widget.Toast.LENGTH_SHORT).show()
                 }
             }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (isDriveConnected) {
+            viewModel.loadDriveFiles()
         }
     }
 
@@ -3681,6 +4013,115 @@ fun CloudManagerScreen(viewModel: MainViewModel) {
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Offline Mode Banner
+            val isDriveOfflineMode by viewModel.isDriveOfflineMode.collectAsState()
+            if (isDriveOfflineMode) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudOff,
+                            contentDescription = "Offline Mode",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Offline Mode",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                text = "Showing last synced files. Connect to internet to refresh.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            // Google Drive Storage Summary Card
+            val driveStorageInfo by viewModel.driveStorageInfo.collectAsState()
+            driveStorageInfo?.let { storage ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Drive Storage Usage",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = SaffronPrimary
+                            )
+                            val usageGb = storage.usageBytes.toDouble() / (1024 * 1024 * 1024)
+                            val limitGb = storage.limitBytes?.let { it.toDouble() / (1024 * 1024 * 1024) }
+                            
+                            val textStr = if (limitGb != null) {
+                                "%.2f GB of %.2f GB used".format(usageGb, limitGb)
+                            } else {
+                                "%.2f GB used (Unlimited Plan)".format(usageGb)
+                            }
+                            Text(
+                                text = textStr,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        val progress = if (storage.limitBytes != null && storage.limitBytes > 0) {
+                            storage.usageBytes.toFloat() / storage.limitBytes.toFloat()
+                        } else {
+                            0f
+                        }
+                        
+                        if (storage.limitBytes != null) {
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                color = SaffronPrimary,
+                                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .testTag("drive_storage_progress")
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { 0.05f },
+                                color = SaffronPrimary,
+                                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .testTag("drive_storage_progress_unlimited")
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             // Real-Time Search Bar
             OutlinedTextField(
@@ -4281,6 +4722,157 @@ fun QuickPreviewBottomSheet(
                                 )
                             }
                         }
+                    }
+                }
+            } else if (file.name.endsWith(".pdf", ignoreCase = true)) {
+                // PDF PREVIEW IN BOTTOM SHEET
+                var pdfThumbnail by remember { mutableStateOf<Bitmap?>(null) }
+                var pageCount by remember { mutableStateOf<Int?>(null) }
+
+                LaunchedEffect(file.path) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val pfd = if (file.path.startsWith("content://")) {
+                                context.contentResolver.openFileDescriptor(android.net.Uri.parse(file.path), "r")
+                            } else {
+                                android.os.ParcelFileDescriptor.open(File(file.path), android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+                            }
+                            if (pfd != null) {
+                                val renderer = android.graphics.pdf.PdfRenderer(pfd)
+                                pageCount = renderer.pageCount
+                                if (renderer.pageCount > 0) {
+                                    val page = renderer.openPage(0)
+                                    val bitmap = Bitmap.createBitmap(240, 320, Bitmap.Config.ARGB_8888)
+                                    val canvas = android.graphics.Canvas(bitmap)
+                                    canvas.drawColor(android.graphics.Color.WHITE)
+                                    page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                    pdfThumbnail = bitmap
+                                    page.close()
+                                }
+                                renderer.close()
+                                pfd.close()
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = file.name,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                        Box(
+                            modifier = Modifier
+                                .width(150.dp)
+                                .height(200.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White)
+                                .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (pdfThumbnail != null) {
+                                Image(
+                                    bitmap = pdfThumbnail!!.asImageBitmap(),
+                                    contentDescription = "PDF first page preview",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.PictureAsPdf,
+                                    contentDescription = "PDF File",
+                                    tint = Color.Red,
+                                    modifier = Modifier.size(48.dp)
+                                )
+                            }
+                        }
+                        pageCount?.let {
+                            Text(
+                                text = "Total Pages: $it • PDF Document",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
+            } else if (mime.contains("text") || file.name.endsWith(".txt", ignoreCase = true) || file.name.endsWith(".json", ignoreCase = true) || file.name.endsWith(".xml", ignoreCase = true)) {
+                // TEXT PREVIEW IN BOTTOM SHEET
+                var textPreview by remember { mutableStateOf<String?>(null) }
+                LaunchedEffect(file.path) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val f = File(file.path)
+                            if (f.exists() && f.isFile) {
+                                val lines = f.bufferedReader().useLines { seq ->
+                                    seq.take(15).joinToString("\n")
+                                }
+                                textPreview = lines
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = file.name,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                        Text(
+                            text = "Content Preview:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SaffronPrimary
+                        )
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 180.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                        ) {
+                            Box(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = textPreview ?: "Loading preview...",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                    overflow = TextOverflow.Ellipsis,
+                                    maxLines = 10
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Size: ${formatFileSize(file.size)} • Text Document",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
                     }
                 }
             } else {

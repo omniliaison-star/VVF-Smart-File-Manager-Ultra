@@ -121,3 +121,15 @@ interface ChatMessageEntityDao {
     suspend fun clearChatMessages()
 }
 
+@Dao
+interface DriveFileDao {
+    @Query("SELECT * FROM drive_files ORDER BY isDirectory DESC, name ASC")
+    suspend fun getAllDriveFiles(): List<DbDriveFile>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDriveFiles(files: List<DbDriveFile>)
+
+    @Query("DELETE FROM drive_files")
+    suspend fun clearAllDriveFiles()
+}
+
